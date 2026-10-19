@@ -2,6 +2,8 @@ package com.waide.mobile.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +18,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -29,6 +30,8 @@ fun ChatScreen(
     state: ChatState,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
+    onToggleMemory: () -> Unit = {},
+    onSetRemembered: (String, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var draft by remember { mutableStateOf("") }
@@ -100,9 +103,16 @@ fun ChatScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> Bubble(m.role, m.text) }
+                items(state.messages, key = { it.id }) { m ->
+                    Bubble(
+                        role = m.role,
+                        text = m.text,
+                        remembered = m.remembered,
+                        onToggleRemembered = { onSetRemembered(m.id, !m.remembered) }
+                    )
+                }
                 if (streamingText != null) {
-                    item { Bubble("assistant", streamingText.ifBlank { "..." }) }
+                    item { Bubble("assistant", streamingText.ifBlank { "..." }, remembered = state.memoryOn, showBadge = false) }
                 }
             }
         }
@@ -120,6 +130,47 @@ fun ChatScreen(
         }
 
         HorizontalDivider(color = W.Line)
+        // Brain memory toggle row
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(W.Surface)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val rememberedCount = state.messages.count { it.remembered }
+            Surface(
+                onClick = onToggleMemory,
+                shape = RoundedCornerShape(20.dp),
+                color = if (state.memoryOn) Color(0x22FF9F1C) else W.Bg,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, if (state.memoryOn) W.Amber else W.Line
+                )
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(if (state.memoryOn) "🧠" else "🧠❌", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        if (state.memoryOn) "Memory on" else "Memory off",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (state.memoryOn) W.Amber else W.Muted
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                when {
+                    rememberedCount > 0 -> "$rememberedCount in memory"
+                    state.memoryOn -> "remembering from here"
+                    else -> "long-press a message to remember it"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = W.Muted
+            )
+        }
         Row(
             Modifier
                 .background(W.Surface)
@@ -170,32 +221,69 @@ fun ChatScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(role: String, text: String) {
+private fun Bubble(
+    role: String,
+    text: String,
+    remembered: Boolean = false,
+    showBadge: Boolean = true,
+    onToggleRemembered: () -> Unit = {}
+) {
     val isUser = role == "user"
+    var menuOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            if (isUser) "YOU" else "W-AI-DE",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (isUser) W.Muted else W.Amber
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (isUser) "YOU" else "W-AI-DE",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isUser) W.Muted else W.Amber,
+                modifier = Modifier.weight(1f)
+            )
+            if (showBadge) {
+                // 🧠 remembered, 🧠❌ not remembered. Tap or long-press to flip.
+                Box {
+                    Text(
+                        if (remembered) "🧠" else "🧠❌",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier
+                            .combinedClickable(
+                                onClick = { menuOpen = true },
+                                onLongClick = { menuOpen = true }
+                            )
+                            .padding(start = 6.dp, end = 2.dp)
+                    )
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (remembered) "🧠❌  Delete from memory" else "🧠  Add to memory") },
+                            onClick = { menuOpen = false; onToggleRemembered() }
+                        )
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(5.dp))
+        val bubbleMod = Modifier
+            .fillMaxWidth()
+            .then(
+                if (isUser) Modifier
+                    .border(
+                        1.dp,
+                        if (remembered && showBadge) W.Amber else W.Line,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .background(W.Surface, RoundedCornerShape(4.dp))
+                    .padding(12.dp)
+                else Modifier.padding(start = 2.dp)
+            )
+        // Selection stays available for copy; the memory badge handles remember/forget.
         SelectionContainer {
             Text(
                 text = text,
                 color = W.Text,
                 style = MaterialTheme.typography.bodyLarge,
-                fontFamily = if (isUser) FontFamily.Default else FontFamily.Default,
                 fontWeight = if (isUser) FontWeight.Medium else FontWeight.Normal,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (isUser) Modifier
-                            .border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                            .background(W.Surface, RoundedCornerShape(4.dp))
-                            .padding(12.dp)
-                        else Modifier.padding(start = 2.dp)
-                    )
+                modifier = bubbleMod
             )
         }
     }
