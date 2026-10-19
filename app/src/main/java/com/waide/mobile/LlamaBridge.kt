@@ -17,6 +17,7 @@ object LlamaBridge {
     external fun nativeSetSampling(temp: Float, topP: Float, minP: Float)
     external fun nativeResetChat(): Boolean
     external fun nativeSetSystemPrompt(sys: String)
+    external fun nativePrimeMessage(role: String, content: String)
     external fun nativeBeginTurn(userMsg: String): Int
     external fun nativeNextToken(): String?
     external fun nativeStop()

@@ -138,7 +138,9 @@ private fun Shell(
                 Tab.Chat -> ChatScreen(
                     state = state,
                     onSend = { vm.send(it) },
-                    onStop = { vm.stopGeneration() }
+                    onStop = { vm.stopGeneration() },
+                    onToggleMemory = { vm.toggleMemory() },
+                    onSetRemembered = { id, r -> vm.setRemembered(id, r) }
                 )
                 Tab.Models -> ModelsScreen(
                     models = models,
