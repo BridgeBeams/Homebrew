@@ -273,6 +273,21 @@ Java_com_waide_mobile_LlamaBridge_nativeSetSystemPrompt(JNIEnv * env, jobject, j
     }
 }
 
+// Append a remembered message (role = "user" or "assistant") to the history
+// without generating anything. Used to replay the brain-memory transcript into a
+// freshly loaded model so a model swap keeps the conversation intact. The next
+// nativeBeginTurn re-templates the whole history, so these primed turns are fed to
+// the new model as its prompt.
+JNIEXPORT void JNICALL
+Java_com_waide_mobile_LlamaBridge_nativePrimeMessage(JNIEnv * env, jobject, jstring role, jstring content) {
+    std::lock_guard<std::mutex> lock(g.mu);
+    std::string r = jstr(env, role);
+    std::string c = jstr(env, content);
+    if (c.empty()) return;
+    if (r != "user" && r != "assistant") r = "user";
+    g.history.push_back(ChatMsg{r, c});
+}
+
 // Queue a user turn: apply the template to the whole history, work out what is
 // new since last time, and tokenize only that delta.
 JNIEXPORT jint JNICALL
