@@ -20,11 +20,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Google retired the legacy "tools" SDK package. Newer runs of
+      # setup-android try to install it and fail with "Failed to find
+      # package 'tools'". Pinning the version and turning that install off
+      # is the fix.
       - name: Set up the Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v3.2.2
+        with:
+          packages: ''
 
       - name: Install the NDK and CMake
-        run: sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1"
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platform-tools" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Cache the compiled engine
         uses: actions/cache@v4
