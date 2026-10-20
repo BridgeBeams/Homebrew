@@ -153,7 +153,7 @@ private fun Shell(
             }
         }
     ) { pad ->
-        Box(Modifier.padding(pad).background(W.Bg)) {
+        Box(Modifier.padding(pad).consumeWindowInsets(pad).background(W.Bg)) {
             when (tab) {
                 Tab.Chat -> ChatScreen(
                     state = state,
