@@ -13,9 +13,7 @@ import kotlinx.coroutines.withContext
 
 data class Message(
     val role: String,      // "user" or "assistant"
-    val text: String,
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val remembered: Boolean = false
+    val text: String
 )
 
 data class ChatState(
@@ -26,8 +24,7 @@ data class ChatState(
     val modelLoading: Boolean = false,
     val tokensPerSecond: Float = 0f,
     val contextUsed: Int = 0,
-    val error: String? = null,
-    val memoryOn: Boolean = false
+    val error: String? = null
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -44,36 +41,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val models: StateFlow<List<GgufFile>> = _models.asStateFlow()
 
     private var genJob: Job? = null
-
-    init {
-        // Restore any remembered conversation from a previous session.
-        val (on, remembered) = store.loadMemory()
-        if (remembered.isNotEmpty() || on) {
-            _state.value = _state.value.copy(messages = remembered, memoryOn = on)
-        }
-    }
-
-    // Persist the remembered slice to disk.
-    private fun persistMemory() {
-        val remembered = _state.value.messages.filter { it.remembered }
-        store.saveMemory(_state.value.memoryOn, remembered)
-    }
-
-    // Brain toggle: from here forward, new messages are remembered.
-    fun toggleMemory() {
-        _state.value = _state.value.copy(memoryOn = !_state.value.memoryOn)
-        persistMemory()
-    }
-
-    // Long-press action: flip a single message in or out of memory.
-    fun setRemembered(id: String, remembered: Boolean) {
-        _state.value = _state.value.copy(
-            messages = _state.value.messages.map {
-                if (it.id == id) it.copy(remembered = remembered) else it
-            }
-        )
-        persistMemory()
-    }
 
     fun refreshModels() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -96,19 +63,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (s.systemPrompt.isNotBlank()) {
                     LlamaBridge.nativeSetSystemPrompt(s.systemPrompt)
                 }
-                // Carry remembered messages across the model swap: replay them into
-                // the fresh engine so the new model answers without missing a beat.
-                val kept = _state.value.messages.filter { it.remembered }
-                for (m in kept) {
-                    LlamaBridge.nativePrimeMessage(m.role, m.text)
-                }
                 _settings.value = s.copy(lastModelPath = file.path)
                 store.save(_settings.value)
                 withContext(Dispatchers.Main) {
                     _state.value = _state.value.copy(
                         modelLoading = false,
                         modelName = file.name,
-                        messages = kept,          // drop un-remembered on swap
+                        messages = emptyList(),
                         streaming = null,
                         contextUsed = 0
                     )
@@ -134,19 +95,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // "New chat" clears the scratch conversation but keeps whatever the brain is
-    // holding: remembered messages are re-primed so they carry into the fresh chat.
     fun newChat() {
         if (_state.value.busy) return
-        val kept = _state.value.messages.filter { it.remembered }
         viewModelScope.launch(Dispatchers.Default) {
             LlamaBridge.nativeResetChat()
             val s = _settings.value
             if (s.systemPrompt.isNotBlank()) LlamaBridge.nativeSetSystemPrompt(s.systemPrompt)
-            for (m in kept) LlamaBridge.nativePrimeMessage(m.role, m.text)
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
-                    messages = kept,
+                    messages = emptyList(),
                     streaming = null,
                     contextUsed = 0,
                     tokensPerSecond = 0f
@@ -155,30 +112,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Wipe the brain entirely (screen + disk).
-    fun clearMemory() {
-        if (_state.value.busy) return
-        _state.value = _state.value.copy(
-            messages = _state.value.messages.map { it.copy(remembered = false) }
-        )
-        store.saveMemory(_state.value.memoryOn, emptyList())
-    }
-
     fun send(text: String) {
         val prompt = text.trim()
         if (prompt.isEmpty() || _state.value.busy || _state.value.modelName.isEmpty()) return
 
-        val remember = _state.value.memoryOn
         _state.value = _state.value.copy(
-            messages = _state.value.messages + Message("user", prompt, remembered = remember),
+            messages = _state.value.messages + Message("user", prompt),
             streaming = "",
             busy = true,
             tokensPerSecond = 0f,
             error = null
         )
-        if (remember) persistMemory()
 
+        GenerationService.begin(getApplication())
         genJob = viewModelScope.launch(Dispatchers.Default) {
+          try {
             val rc = LlamaBridge.nativeBeginTurn(prompt)
             if (rc != 0) {
                 val err = LlamaBridge.nativeLastError()
@@ -220,13 +168,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val used = LlamaBridge.nativeContextUsed()
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
-                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }, remembered = remember),
+                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }),
                     streaming = null,
                     busy = false,
                     contextUsed = used
                 )
-                if (remember) persistMemory()
             }
+          } finally {
+            GenerationService.end(getApplication())
+          }
         }
     }
 

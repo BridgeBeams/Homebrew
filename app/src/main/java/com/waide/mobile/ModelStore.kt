@@ -2,8 +2,6 @@ package com.waide.mobile
 
 import android.content.Context
 import android.os.Environment
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 data class GgufFile(
@@ -26,7 +24,8 @@ data class WaideSettings(
     val temperature: Float = 0.7f,
     val topP: Float = 0.9f,
     val minP: Float = 0.05f,
-    val systemPrompt: String = ""
+    val systemPrompt: String = "",
+    val serverUrl: String = ""      // e.g. http://100.x.y.z:11434  (your PC over Tailscale)
 )
 
 class ModelStore(context: Context) {
@@ -40,7 +39,8 @@ class ModelStore(context: Context) {
         temperature = prefs.getFloat("temp", 0.7f),
         topP = prefs.getFloat("topP", 0.9f),
         minP = prefs.getFloat("minP", 0.05f),
-        systemPrompt = prefs.getString("system", "") ?: ""
+        systemPrompt = prefs.getString("system", "") ?: "",
+        serverUrl = prefs.getString("serverUrl", "") ?: ""
     )
 
     fun save(s: WaideSettings) {
@@ -52,42 +52,8 @@ class ModelStore(context: Context) {
             .putFloat("topP", s.topP)
             .putFloat("minP", s.minP)
             .putString("system", s.systemPrompt)
+            .putString("serverUrl", s.serverUrl)
             .apply()
-    }
-
-    // ---- brain memory: the remembered slice persists so it survives restarts ----
-    fun saveMemory(on: Boolean, remembered: List<Message>) {
-        val arr = JSONArray()
-        remembered.forEach { m ->
-            arr.put(JSONObject().apply {
-                put("id", m.id); put("role", m.role); put("text", m.text)
-            })
-        }
-        prefs.edit()
-            .putBoolean("mem_on", on)
-            .putString("mem_msgs", arr.toString())
-            .apply()
-    }
-
-    fun loadMemory(): Pair<Boolean, List<Message>> {
-        val on = prefs.getBoolean("mem_on", false)
-        val raw = prefs.getString("mem_msgs", "") ?: ""
-        val out = mutableListOf<Message>()
-        if (raw.isNotBlank()) {
-            runCatching {
-                val arr = JSONArray(raw)
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    out += Message(
-                        role = o.getString("role"),
-                        text = o.getString("text"),
-                        id = o.optString("id", "r$i"),
-                        remembered = true
-                    )
-                }
-            }
-        }
-        return on to out
     }
 
     companion object {

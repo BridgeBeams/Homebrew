@@ -17,6 +17,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
+    var server by remember(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
 
     Column(
         modifier
@@ -24,6 +25,34 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        Text("SERVER", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Your own PC's address, used by the Server tab. Over Tailscale this looks like " +
+                "http://100.x.y.z:11434. The local Chat tab ignores this and stays offline.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = server,
+            onValueChange = { server = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text("http://100.x.y.z:11434", color = W.Muted) },
+            shape = RoundedCornerShape(4.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line
+            )
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { onChange(settings.copy(serverUrl = server.trim())) },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Save server address") }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
         Text("ENGINE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(12.dp))
 
