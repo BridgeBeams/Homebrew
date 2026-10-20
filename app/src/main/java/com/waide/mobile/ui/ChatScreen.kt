@@ -123,6 +123,7 @@ fun ChatScreen(
         Row(
             Modifier
                 .background(W.Surface)
+                .imePadding()
                 .padding(10.dp),
             verticalAlignment = Alignment.Bottom
         ) {

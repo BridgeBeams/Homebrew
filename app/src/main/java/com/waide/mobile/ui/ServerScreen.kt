@@ -212,7 +212,7 @@ fun ServerScreen(
 
         HorizontalDivider(color = W.Line)
         Row(
-            Modifier.background(W.Surface).padding(10.dp),
+            Modifier.background(W.Surface).imePadding().padding(10.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             OutlinedTextField(
