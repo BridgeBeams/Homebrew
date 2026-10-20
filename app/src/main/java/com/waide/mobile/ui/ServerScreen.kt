@@ -70,7 +70,7 @@ fun ServerScreen(
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
 
-    Column(modifier.fillMaxSize().imePadding()) {
+    Column(modifier.fillMaxSize()) {
 
         // Machine picker
         Row(
