@@ -2,7 +2,16 @@ package com.waide.mobile
 
 import android.content.Context
 import android.os.Environment
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+
+// One server (machine) the app can talk to over Tailscale.
+data class ServerEntry(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val url: String
+)
 
 data class GgufFile(
     val name: String,
@@ -55,6 +64,44 @@ class ModelStore(context: Context) {
             .putString("serverUrl", s.serverUrl)
             .apply()
     }
+
+    // ---------------- servers (machines) ----------------
+    // The list of machines the app can reach. On first run, any single legacy
+    // serverUrl is migrated into one entry so nothing is lost.
+    fun loadServers(): List<ServerEntry> {
+        val raw = prefs.getString("servers", "") ?: ""
+        val out = mutableListOf<ServerEntry>()
+        if (raw.isNotBlank()) {
+            runCatching {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    out += ServerEntry(o.optString("id", "s$i"), o.optString("name", "Server"), o.optString("url"))
+                }
+            }
+        }
+        if (out.isEmpty()) {
+            val legacy = prefs.getString("serverUrl", "") ?: ""
+            if (legacy.isNotBlank()) {
+                val e = ServerEntry(name = "My PC", url = legacy)
+                out += e
+                saveServers(out)
+                setActiveServerId(e.id)
+            }
+        }
+        return out
+    }
+
+    fun saveServers(list: List<ServerEntry>) {
+        val arr = JSONArray()
+        list.forEach { s ->
+            arr.put(JSONObject().put("id", s.id).put("name", s.name).put("url", s.url))
+        }
+        prefs.edit().putString("servers", arr.toString()).apply()
+    }
+
+    fun getActiveServerId(): String = prefs.getString("activeServer", "") ?: ""
+    fun setActiveServerId(id: String) { prefs.edit().putString("activeServer", id).apply() }
 
     companion object {
         /**

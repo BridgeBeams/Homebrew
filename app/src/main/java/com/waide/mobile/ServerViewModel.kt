@@ -19,7 +19,18 @@ data class ServerState(
     val selectedModel: String = "",
     val loadingModels: Boolean = false,
     val connected: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val managingBusy: Boolean = false,       // a pull/delete is in flight
+    val pullStatus: String? = null,          // live download progress text
+    // Hugging Face search
+    val searching: Boolean = false,
+    val searchResults: List<HfModel> = emptyList(),
+    val quantRepo: String? = null,           // repo whose quant list is open
+    val loadingQuants: Boolean = false,
+    val quants: List<HfQuant> = emptyList(),
+    // machines
+    val servers: List<ServerEntry> = emptyList(),
+    val activeServerId: String = ""
 )
 
 /**
@@ -35,7 +46,55 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
     private var genJob: Job? = null
 
-    private fun serverUrl(): String = store.load().serverUrl
+    init {
+        val servers = store.loadServers()
+        val active = store.getActiveServerId().ifBlank { servers.firstOrNull()?.id ?: "" }
+        _state.value = _state.value.copy(servers = servers, activeServerId = active)
+    }
+
+    private fun activeServer(): ServerEntry? =
+        _state.value.servers.firstOrNull { it.id == _state.value.activeServerId }
+            ?: _state.value.servers.firstOrNull()
+
+    private fun serverUrl(): String = activeServer()?.url ?: ""
+
+    // ---------------- machines ----------------
+    fun selectServer(id: String) {
+        if (id == _state.value.activeServerId) return
+        store.setActiveServerId(id)
+        _state.value = _state.value.copy(
+            activeServerId = id, models = emptyList(), selectedModel = "",
+            messages = emptyList(), streaming = null, connected = false, error = null
+        )
+        refreshModels()
+    }
+
+    fun addServer(name: String, url: String) {
+        val n = name.trim().ifBlank { "Server" }
+        val u = url.trim()
+        if (u.isBlank()) return
+        val e = ServerEntry(name = n, url = u)
+        val list = _state.value.servers + e
+        store.saveServers(list)
+        val makeActive = _state.value.activeServerId.isBlank()
+        if (makeActive) store.setActiveServerId(e.id)
+        _state.value = _state.value.copy(
+            servers = list,
+            activeServerId = if (makeActive) e.id else _state.value.activeServerId
+        )
+    }
+
+    fun removeServer(id: String) {
+        val list = _state.value.servers.filter { it.id != id }
+        store.saveServers(list)
+        var active = _state.value.activeServerId
+        if (active == id) {
+            active = list.firstOrNull()?.id ?: ""
+            store.setActiveServerId(active)
+        }
+        _state.value = _state.value.copy(servers = list, activeServerId = active,
+            models = emptyList(), selectedModel = "", connected = false)
+    }
 
     fun refreshModels() {
         _state.value = _state.value.copy(loadingModels = true, error = null)
@@ -64,6 +123,82 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectModel(name: String) {
         _state.value = _state.value.copy(selectedModel = name)
+    }
+
+    // Remove a model from the server, then refresh the list.
+    fun deleteServerModel(name: String) {
+        if (_state.value.managingBusy) return
+        _state.value = _state.value.copy(managingBusy = true, error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ServerClient.deleteModel(serverUrl(), name) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(managingBusy = false)
+                r.onFailure { _state.value = _state.value.copy(error = it.message ?: "Delete failed.") }
+                refreshModels()
+            }
+        }
+    }
+
+    // ---------------- Hugging Face search ----------------
+    fun searchHf(query: String) {
+        val q = query.trim()
+        if (q.isBlank() || _state.value.searching) return
+        _state.value = _state.value.copy(searching = true, error = null, searchResults = emptyList())
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ServerClient.searchHf(q) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _state.value = _state.value.copy(searching = false, searchResults = it) }
+                 .onFailure { _state.value = _state.value.copy(searching = false, error = it.message ?: "Search failed.") }
+            }
+        }
+    }
+
+    fun openQuants(repoId: String) {
+        _state.value = _state.value.copy(quantRepo = repoId, loadingQuants = true, quants = emptyList(), error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ServerClient.listHfQuants(repoId) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _state.value = _state.value.copy(loadingQuants = false, quants = it) }
+                 .onFailure { _state.value = _state.value.copy(loadingQuants = false, quantRepo = null, error = it.message ?: "Could not read that repo.") }
+            }
+        }
+    }
+
+    fun closeQuants() {
+        _state.value = _state.value.copy(quantRepo = null, quants = emptyList(), loadingQuants = false)
+    }
+
+    // Pull a chosen Hugging Face repo+quant onto the server.
+    fun pullHf(repoId: String, tag: String) {
+        closeQuants()
+        pullServerModel("hf.co/$repoId:$tag")
+    }
+
+    // Download a model onto the server by name, with live progress. The foreground
+    // service keeps it going if the screen locks during a long download.
+    fun pullServerModel(name: String) {
+        val n = name.trim()
+        if (n.isBlank() || _state.value.managingBusy) return
+        _state.value = _state.value.copy(managingBusy = true, pullStatus = "Starting...", error = null)
+        GenerationService.begin(getApplication())
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                ServerClient.pullModel(serverUrl(), n) { p ->
+                    _state.value = _state.value.copy(pullStatus = p)
+                }
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(managingBusy = false, pullStatus = null)
+                    refreshModels()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(managingBusy = false, pullStatus = null,
+                        error = e.message ?: "Pull failed.")
+                }
+            } finally {
+                GenerationService.end(getApplication())
+            }
+        }
     }
 
     fun clearChat() {

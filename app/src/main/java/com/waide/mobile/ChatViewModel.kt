@@ -48,6 +48,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Delete a local .gguf file from storage, then rescan. If it's the loaded one,
+    // unload it from memory first so the app isn't pointing at a deleted file.
+    fun deleteLocalModel(file: GgufFile) {
+        if (_state.value.busy) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (_state.value.modelName == file.name) {
+                LlamaBridge.nativeUnload()
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(modelName = "", messages = emptyList(), contextUsed = 0)
+                }
+            }
+            val ok = runCatching { java.io.File(file.path).delete() }.getOrDefault(false)
+            val list = ModelStore.scan(getApplication())
+            withContext(Dispatchers.Main) {
+                _models.value = list
+                if (!ok) _state.value = _state.value.copy(error = "Could not delete ${file.name}.")
+            }
+        }
+    }
+
     fun dismissError() {
         _state.value = _state.value.copy(error = null)
     }

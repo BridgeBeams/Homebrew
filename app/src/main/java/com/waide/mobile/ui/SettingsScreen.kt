@@ -8,16 +8,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.waide.mobile.ServerEntry
 import com.waide.mobile.WaideSettings
 
 @Composable
 fun SettingsScreen(
     settings: WaideSettings,
     onChange: (WaideSettings) -> Unit,
+    servers: List<ServerEntry> = emptyList(),
+    onAddServer: (String, String) -> Unit = { _, _ -> },
+    onRemoveServer: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
-    var server by remember(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
+    var newName by remember { mutableStateOf("") }
+    var newUrl by remember { mutableStateOf("") }
 
     Column(
         modifier
@@ -25,30 +30,53 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        Text("SERVER", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Text("MACHINES", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Your own PC's address, used by the Server tab. Over Tailscale this looks like " +
-                "http://100.x.y.z:11434. The local Chat tab ignores this and stays offline.",
+            "The servers the Server tab can reach, each by its Tailscale address " +
+                "(http://100.x.y.z:11434). Add more as you set up more machines, then " +
+                "switch between them from the dropdown on the Server tab.",
             color = W.Muted, style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(10.dp))
+
+        servers.forEach { s ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(s.name, color = W.Text, style = MaterialTheme.typography.bodyLarge)
+                    Text(s.url, color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = { onRemoveServer(s.id) }) { Text("Remove", color = W.Danger) }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("ADD A MACHINE", style = MaterialTheme.typography.labelSmall, color = W.Muted)
+        Spacer(Modifier.height(6.dp))
         OutlinedTextField(
-            value = server,
-            onValueChange = { server = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
+            value = newName, onValueChange = { newName = it },
+            modifier = Modifier.fillMaxWidth(), singleLine = true,
+            placeholder = { Text("name, e.g. Shop PC", color = W.Muted) },
+            shape = RoundedCornerShape(4.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
+        )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = newUrl, onValueChange = { newUrl = it },
+            modifier = Modifier.fillMaxWidth(), singleLine = true,
             placeholder = { Text("http://100.x.y.z:11434", color = W.Muted) },
             shape = RoundedCornerShape(4.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line
-            )
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Button(
-            onClick = { onChange(settings.copy(serverUrl = server.trim())) },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Save server address") }
+            onClick = { onAddServer(newName, newUrl); newName = ""; newUrl = "" },
+            enabled = newUrl.isNotBlank(),
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
+        ) { Text("Add machine") }
 
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)

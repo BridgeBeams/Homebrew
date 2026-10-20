@@ -15,6 +15,10 @@ import java.net.URL
  * Amnesia: nothing is stored here. The full message list is sent each turn from
  * memory; when the Server tab's chat is cleared, it's gone.
  */
+// A Hugging Face search hit, and one downloadable quant within a repo.
+data class HfModel(val id: String, val updated: String, val downloads: Long)
+data class HfQuant(val fileName: String, val tag: String)
+
 object ServerClient {
 
     private fun normalize(base: String): String {
@@ -42,6 +46,123 @@ object ServerClient {
                 arr.getJSONObject(i).optString("name").takeIf { it.isNotBlank() }?.let { out.add(it) }
             }
             return out.sorted()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // ---------------- Hugging Face model search ----------------
+    // The phone queries Hugging Face directly (public API, no login). Results are
+    // GGUF repos, newest first, so nothing stale floats to the top.
+    fun searchHf(query: String, limit: Int = 30): List<HfModel> {
+        val q = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+        val url = "https://huggingface.co/api/models?search=$q&filter=gguf" +
+            "&sort=lastModified&direction=-1&limit=$limit"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"; connectTimeout = 8000; readTimeout = 12000
+            setRequestProperty("User-Agent", "waide-app")
+        }
+        try {
+            if (conn.responseCode != 200) throw IllegalStateException("Hugging Face returned ${conn.responseCode}")
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val arr = JSONArray(body)
+            val out = ArrayList<HfModel>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val id = o.optString("id")
+                if (id.isNotBlank()) {
+                    out.add(HfModel(id, o.optString("lastModified").take(10), o.optLong("downloads", 0)))
+                }
+            }
+            return out
+        } finally { conn.disconnect() }
+    }
+
+    // List the downloadable quants (Q4_K_M, Q5_K_M, ...) inside one repo.
+    fun listHfQuants(repoId: String): List<HfQuant> {
+        val url = "https://huggingface.co/api/models/$repoId"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"; connectTimeout = 8000; readTimeout = 12000
+            setRequestProperty("User-Agent", "waide-app")
+        }
+        try {
+            if (conn.responseCode != 200) throw IllegalStateException("Hugging Face returned ${conn.responseCode}")
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val sib = JSONObject(body).optJSONArray("siblings") ?: JSONArray()
+            val re = Regex("(?i)(IQ\\d+[A-Z0-9_]*|Q\\d+[A-Z0-9_]*|F16|F32|BF16)")
+            val out = LinkedHashMap<String, HfQuant>()
+            for (i in 0 until sib.length()) {
+                val fn = sib.getJSONObject(i).optString("rfilename")
+                if (!fn.endsWith(".gguf", ignoreCase = true)) continue
+                // skip multi-part extra shards; keep the first part only
+                if (Regex("(?i)-0000[2-9]-of-").containsMatchIn(fn)) continue
+                val base = fn.substringAfterLast('/')
+                val tag = re.find(base)?.value?.uppercase() ?: base.removeSuffix(".gguf").substringAfterLast('.')
+                if (tag.isNotBlank()) out.putIfAbsent(tag, HfQuant(base, tag))
+            }
+            return out.values.toList()
+        } finally { conn.disconnect() }
+    }
+
+    /** DELETE {base}/api/delete — remove a model from the server. */
+    fun deleteModel(base: String, name: String) {
+        val b = normalize(base)
+        if (b.isEmpty()) throw IllegalStateException("No server address set.")
+        val conn = (URL("$b/api/delete").openConnection() as HttpURLConnection).apply {
+            requestMethod = "DELETE"
+            doOutput = true
+            connectTimeout = 8000
+            readTimeout = 20000
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            val body = JSONObject().put("name", name).put("model", name).toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body); it.flush() }
+            val code = conn.responseCode
+            if (code != 200) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                throw IllegalStateException("Delete failed ($code)${if (err != null) ": $err" else ""}")
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * POST {base}/api/pull (streaming) — download a model onto the server by name,
+     * e.g. "qwen2.5:7b" or "hf.co/TheBloke/MythoMax-L2-13B-GGUF:Q4_K_M".
+     * Calls onProgress with a human-readable status/percent line.
+     */
+    fun pullModel(base: String, name: String, onProgress: (String) -> Unit) {
+        val b = normalize(base)
+        if (b.isEmpty()) throw IllegalStateException("No server address set.")
+        val conn = (URL("$b/api/pull").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 10000
+            readTimeout = 0
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            val body = JSONObject().put("name", name).put("model", name).toString()
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body); it.flush() }
+            if (conn.responseCode != 200) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                throw IllegalStateException("Pull failed (${conn.responseCode})${if (err != null) ": $err" else ""}")
+            }
+            BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isBlank()) continue
+                    val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
+                    if (o.has("error")) throw IllegalStateException(o.optString("error"))
+                    val status = o.optString("status")
+                    val completed = o.optLong("completed", -1)
+                    val total = o.optLong("total", -1)
+                    val msg = if (completed >= 0 && total > 0) "$status  ${100 * completed / total}%" else status
+                    if (msg.isNotBlank()) onProgress(msg)
+                }
+            }
         } finally {
             conn.disconnect()
         }

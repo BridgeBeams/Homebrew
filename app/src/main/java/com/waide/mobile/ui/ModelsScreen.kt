@@ -8,7 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -25,8 +25,11 @@ fun ModelsScreen(
     onRefresh: () -> Unit,
     onLoad: (GgufFile) -> Unit,
     onUnload: () -> Unit,
+    onDelete: (GgufFile) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var confirmDelete by remember { mutableStateOf<GgufFile?>(null) }
+
     Column(modifier.fillMaxSize().padding(16.dp)) {
 
         Text("MODELS ON THIS PHONE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
@@ -91,24 +94,51 @@ fun ModelsScreen(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(models) { m ->
                     val active = m.name == loadedName
-                    Column(
+                    Row(
                         Modifier
                             .fillMaxWidth()
                             .border(1.dp, if (active) W.Amber else W.Line, RoundedCornerShape(4.dp))
                             .background(if (active) W.SurfaceHi else W.Surface, RoundedCornerShape(4.dp))
                             .clickable(enabled = !loading && !active) { onLoad(m) }
-                            .padding(14.dp)
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(m.name, color = W.Text, style = MaterialTheme.typography.bodyLarge)
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            if (active) "LOADED  ${m.sizeLabel}" else m.sizeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (active) W.Amber else W.Muted
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(m.name, color = W.Text, style = MaterialTheme.typography.bodyLarge)
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                if (active) "LOADED  ${m.sizeLabel}" else m.sizeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (active) W.Amber else W.Muted
+                            )
+                        }
+                        TextButton(onClick = { confirmDelete = m }, enabled = !loading) {
+                            Text("Delete", color = W.Danger)
+                        }
                     }
                 }
             }
         }
+    }
+
+    confirmDelete?.let { m ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            confirmButton = {
+                TextButton(onClick = { onDelete(m); confirmDelete = null }) {
+                    Text("Delete", color = W.Danger)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel", color = W.Muted) } },
+            title = { Text("Delete this model?", color = W.Text) },
+            text = {
+                Text(
+                    "This permanently deletes ${m.name} (${m.sizeLabel}) from your phone's storage. " +
+                        "You can download it again later.",
+                    color = W.Muted
+                )
+            },
+            containerColor = W.Surface
+        )
     }
 }

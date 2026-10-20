@@ -168,20 +168,31 @@ private fun Shell(
                     onGrantStorage = requestAllFiles,
                     onRefresh = { vm.refreshModels() },
                     onLoad = { vm.loadModel(it); tab = Tab.Chat },
-                    onUnload = { vm.unloadModel() }
+                    onUnload = { vm.unloadModel() },
+                    onDelete = { vm.deleteLocalModel(it) }
                 )
                 Tab.Server -> ServerScreen(
                     state = serverState,
-                    hasServerUrl = settings.serverUrl.isNotBlank(),
+                    hasServerUrl = serverState.servers.any { it.id == serverState.activeServerId },
                     onRefreshModels = { svm.refreshModels() },
                     onSelectModel = { svm.selectModel(it) },
                     onSend = { svm.send(it) },
                     onStop = { svm.stopGeneration() },
-                    onClear = { svm.clearChat() }
+                    onClear = { svm.clearChat() },
+                    onDeleteServerModel = { svm.deleteServerModel(it) },
+                    onPullServerModel = { svm.pullServerModel(it) },
+                    onSearchHf = { svm.searchHf(it) },
+                    onOpenQuants = { svm.openQuants(it) },
+                    onCloseQuants = { svm.closeQuants() },
+                    onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
+                    onSelectServer = { svm.selectServer(it) }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
-                    onChange = { vm.updateSettings(it) }
+                    onChange = { vm.updateSettings(it) },
+                    servers = serverState.servers,
+                    onAddServer = { n, u -> svm.addServer(n, u) },
+                    onRemoveServer = { svm.removeServer(it) }
                 )
             }
         }
