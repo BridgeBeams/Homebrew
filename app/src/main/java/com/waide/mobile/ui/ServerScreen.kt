@@ -70,7 +70,7 @@ fun ServerScreen(
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
 
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().imePadding()) {
 
         // Machine picker
         Row(
@@ -88,7 +88,7 @@ fun ServerScreen(
                 ) {
                     OutlinedTextField(
                         value = activeServer?.name ?: "Pick a machine",
-                        onValueChange = {}, readOnly = true,
+                        onValueChange = {}, readOnly = true, singleLine = true,
                         label = { Text("Machine", color = W.Muted) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = machineMenu) },
                         modifier = Modifier.menuAnchor().fillMaxWidth(),
@@ -125,6 +125,7 @@ fun ServerScreen(
                     value = state.selectedModel.ifBlank { "No model" },
                     onValueChange = {},
                     readOnly = true,
+                    singleLine = true,
                     label = { Text("Server model", color = W.Muted) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuOpen) },
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
@@ -211,7 +212,7 @@ fun ServerScreen(
 
         HorizontalDivider(color = W.Line)
         Row(
-            Modifier.background(W.Surface).imePadding().padding(10.dp),
+            Modifier.background(W.Surface).padding(10.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             OutlinedTextField(
