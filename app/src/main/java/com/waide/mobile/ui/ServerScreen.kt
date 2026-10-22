@@ -34,6 +34,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.waide.mobile.Message
 import com.waide.mobile.ServerState
 
@@ -83,6 +89,7 @@ fun ServerScreen(
     var draft by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var machineMenu by remember { mutableStateOf(false) }
+    var zoomB64 by remember { mutableStateOf<String?>(null) }   // image tapped for full screen
     val listState = rememberLazyListState()
     val streamingText = state.streaming
     val activeServer = state.servers.firstOrNull { it.id == state.activeServerId }
@@ -224,7 +231,7 @@ fun ServerScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> SrvBubble(m) }
+                items(state.messages) { m -> SrvBubble(m, onImageTap = { zoomB64 = it }) }
                 if (streamingText != null) item {
                     val t = if (state.visionBusy) "reading image..." else streamingText.ifBlank { "..." }
                     SrvBubble(Message("assistant", t))
@@ -364,6 +371,40 @@ fun ServerScreen(
             onUse = onSetVisionModel,
             onDelete = onDeleteServerModel
         )
+    }
+
+    // Tap an attached image to inspect it full screen (pinch to zoom, drag to pan).
+    zoomB64?.let { b64 ->
+        val bmp = remember(b64) { decodeB64(b64) }
+        Dialog(
+            onDismissRequest = { zoomB64 = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            var scale by remember { mutableStateOf(1f) }
+            var offset by remember { mutableStateOf(Offset.Zero) }
+            val tstate = rememberTransformableState { zoom, pan, _ ->
+                scale = (scale * zoom).coerceIn(1f, 6f)
+                offset += pan
+            }
+            Box(Modifier.fillMaxSize().background(Color(0xE6000000))) {
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp, contentDescription = "full image",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                            .graphicsLayer(
+                                scaleX = scale, scaleY = scale,
+                                translationX = offset.x, translationY = offset.y
+                            )
+                            .transformable(tstate)
+                    )
+                }
+                TextButton(
+                    onClick = { zoomB64 = null },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                ) { Text("Close", color = W.Amber) }
+            }
+        }
     }
 }
 
@@ -692,7 +733,7 @@ private fun ServerModelsManager(
 }
 
 @Composable
-private fun SrvBubble(m: Message) {
+private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
     // A hidden image-read note: show only a tiny marker, never the readout text.
     if (m.role == "system") {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -720,6 +761,7 @@ private fun SrvBubble(m: Message) {
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.heightIn(max = 160.dp)
                         .border(1.dp, W.Line, RoundedCornerShape(4.dp))
+                        .clickable { onImageTap(b64) }
                 )
                 Spacer(Modifier.height(6.dp))
             }
