@@ -30,7 +30,11 @@ data class ServerState(
     val quants: List<HfQuant> = emptyList(),
     // machines
     val servers: List<ServerEntry> = emptyList(),
-    val activeServerId: String = ""
+    val activeServerId: String = "",
+    // server context window (session only; resets to the default on a cold start)
+    val ctx: Int = 8192,
+    val bumpTo: Int? = null,            // non-null -> ask to raise ctx to this value
+    val pendingPrompt: String? = null   // prompt held while the user decides
 )
 
 /**
@@ -203,28 +207,89 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearChat() {
         if (_state.value.busy) return
-        _state.value = _state.value.copy(messages = emptyList(), streaming = null, error = null)
+        _state.value = _state.value.copy(messages = emptyList(), streaming = null, error = null,
+            bumpTo = null, pendingPrompt = null)
     }
 
     fun dismissError() { _state.value = _state.value.copy(error = null) }
 
+    /**
+     * Last-resort guard so the sent thread never overflows the window. The full thread
+     * stays on screen; only what fits the given character budget is actually sent. The
+     * newest message is always kept, so even one very large paste still goes through.
+     * In normal use the bump prompt raises the window first, so this rarely trims.
+     */
+    private fun trimToBudget(msgs: List<Message>, maxChars: Int): List<Message> {
+        if (msgs.isEmpty()) return msgs
+        var total = 0
+        val kept = ArrayDeque<Message>()
+        for (m in msgs.asReversed()) {
+            val len = m.text.length + 16
+            if (kept.isNotEmpty() && total + len > maxChars) break
+            kept.addFirst(m)
+            total += len
+        }
+        return kept.toList()
+    }
+
+    // Set the server window for this session (from the Settings slider). Not saved,
+    // so it returns to the default the next time the app is opened from closed.
+    fun setCtx(v: Int) {
+        val snapped = (v.coerceIn(2048, MAX_CTX) / 2048) * 2048
+        _state.value = _state.value.copy(ctx = snapped.coerceAtLeast(2048))
+    }
+
     fun send(text: String) {
         val prompt = text.trim()
         if (prompt.isEmpty() || _state.value.busy) return
-        val model = _state.value.selectedModel
-        if (model.isBlank()) {
+        if (_state.value.selectedModel.isBlank()) {
             _state.value = _state.value.copy(error = "Pick a model first (tap Refresh if the list is empty).")
             return
         }
+        // Would this prompt plus the running thread overflow the current window? If
+        // so, ask before leaning harder on the GPU instead of silently trimming.
+        val projected = _state.value.messages + Message("user", prompt)
+        val needed = estimateTokens(projected) + REPLY_RESERVE
+        val cur = _state.value.ctx
+        if (needed > cur && cur < MAX_CTX) {
+            val desired = roundUp2048(needed).coerceAtMost(MAX_CTX)
+            if (desired > cur) {
+                _state.value = _state.value.copy(bumpTo = desired, pendingPrompt = prompt)
+                return
+            }
+        }
+        runSend(prompt, cur)
+    }
+
+    // User agreed to the larger window: raise it for this conversation and send.
+    fun confirmBump() {
+        val target = _state.value.bumpTo ?: return
+        val prompt = _state.value.pendingPrompt ?: return
+        _state.value = _state.value.copy(ctx = target, bumpTo = null, pendingPrompt = null)
+        runSend(prompt, target)
+    }
+
+    // User declined: send at the current window (older messages get trimmed to fit).
+    fun declineBump() {
+        val prompt = _state.value.pendingPrompt ?: return
+        val cur = _state.value.ctx
+        _state.value = _state.value.copy(bumpTo = null, pendingPrompt = null)
+        runSend(prompt, cur)
+    }
+
+    private fun runSend(prompt: String, numCtx: Int) {
+        val model = _state.value.selectedModel
+        if (model.isBlank()) return
         val outgoing = _state.value.messages + Message("user", prompt)
         _state.value = _state.value.copy(messages = outgoing, streaming = "", busy = true, error = null)
 
-        val numCtx = store.load().contextSize
+        val budgetChars = (numCtx - REPLY_RESERVE).coerceAtLeast(1024) * 4
+        val toSend = trimToBudget(outgoing, budgetChars)
         GenerationService.begin(getApplication())
         genJob = viewModelScope.launch(Dispatchers.IO) {
           try {
             var acc = ""
-            val reply = ServerClient.chatStream(serverUrl(), model, outgoing, numCtx) { piece ->
+            val reply = ServerClient.chatStream(serverUrl(), model, toSend, numCtx) { piece ->
                 acc += piece
                 _state.value = _state.value.copy(streaming = acc)
             }
@@ -245,8 +310,25 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Rough token count for the whole thread: ~4 characters per token, plus a little
+    // per-message overhead. Only used to decide whether to ask for a bigger window.
+    private fun estimateTokens(msgs: List<Message>): Int {
+        var chars = 0
+        for (m in msgs) chars += m.text.length + 8
+        return chars / 4
+    }
+
+    private fun roundUp2048(n: Int): Int =
+        (((n + 2047) / 2048) * 2048).coerceAtLeast(2048)
+
     fun stopGeneration() {
         genJob?.cancel()
         _state.value = _state.value.copy(busy = false, streaming = null)
+    }
+
+    companion object {
+        const val DEFAULT_CTX = 8192
+        const val MAX_CTX = 65536      // 8x the default
+        const val REPLY_RESERVE = 1024 // tokens held back for the model's answer
     }
 }

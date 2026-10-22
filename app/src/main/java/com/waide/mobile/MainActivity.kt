@@ -185,14 +185,18 @@ private fun Shell(
                     onOpenQuants = { svm.openQuants(it) },
                     onCloseQuants = { svm.closeQuants() },
                     onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
-                    onSelectServer = { svm.selectServer(it) }
+                    onSelectServer = { svm.selectServer(it) },
+                    onConfirmBump = { svm.confirmBump() },
+                    onDeclineBump = { svm.declineBump() }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
                     onChange = { vm.updateSettings(it) },
                     servers = serverState.servers,
                     onAddServer = { n, u -> svm.addServer(n, u) },
-                    onRemoveServer = { svm.removeServer(it) }
+                    onRemoveServer = { svm.removeServer(it) },
+                    serverCtx = serverState.ctx,
+                    onServerCtxChange = { svm.setCtx(it) }
                 )
             }
         }
