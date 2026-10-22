@@ -39,6 +39,8 @@ fun ServerScreen(
     onCloseQuants: () -> Unit = {},
     onPullHf: (String, String) -> Unit = { _, _ -> },
     onSelectServer: (String) -> Unit = {},
+    onConfirmBump: () -> Unit = {},
+    onDeclineBump: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var managing by remember { mutableStateOf(false) }
@@ -246,6 +248,29 @@ fun ServerScreen(
                 )
             }
         }
+    }
+
+    // Asked when a prompt would overflow the current window: raise it or keep it light.
+    state.bumpTo?.let { target ->
+        AlertDialog(
+            onDismissRequest = onDeclineBump,
+            confirmButton = {
+                TextButton(onClick = onConfirmBump) { Text("Yes, bump it", color = W.Amber) }
+            },
+            dismissButton = {
+                TextButton(onClick = onDeclineBump) { Text("No, keep it light", color = W.Muted) }
+            },
+            title = { Text("Lean harder on your GPU?", color = W.Text) },
+            text = {
+                Text(
+                    "This one's big. To answer it without dropping earlier parts of the " +
+                        "conversation, I need to raise this chat's window to $target tokens, " +
+                        "which uses more of the PC's memory. Bump it up just for this conversation?",
+                    color = W.Muted
+                )
+            },
+            containerColor = W.Surface
+        )
     }
 }
 

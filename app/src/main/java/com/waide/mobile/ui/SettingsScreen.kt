@@ -18,6 +18,8 @@ fun SettingsScreen(
     servers: List<ServerEntry> = emptyList(),
     onAddServer: (String, String) -> Unit = { _, _ -> },
     onRemoveServer: (String) -> Unit = {},
+    serverCtx: Int = 8192,
+    onServerCtxChange: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
@@ -81,16 +83,31 @@ fun SettingsScreen(
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
         Spacer(Modifier.height(18.dp))
+        Text("SERVER", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(12.dp))
+
+        Slider2(
+            label = "Server context size",
+            value = serverCtx.toFloat(),
+            range = 2048f..65536f,
+            steps = 30,
+            display = "$serverCtx tokens",
+            help = "The server model's window for this session: your prompt plus the running conversation. It starts at 8,192 each time you open the app fresh. If a message needs more, the app asks before leaning harder on your PC, so you don't have to set this. Raise it here only if you'd rather do it yourself. Bigger uses more of the PC's memory."
+        ) { onServerCtxChange(it.toInt()) }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
         Text("ENGINE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(12.dp))
 
         Slider2(
-            label = "Context size",
+            label = "Phone context size",
             value = settings.contextSize.toFloat(),
             range = 1024f..16384f,
             steps = 14,
             display = "${settings.contextSize} tokens",
-            help = "How much conversation the model can hold. Bigger uses more RAM. Takes effect when you next load a model."
+            help = "For the on-phone Chat tab. How much conversation the local model can hold. Bigger uses more of the phone's RAM. Takes effect when you next load a model."
         ) { onChange(settings.copy(contextSize = (it / 1024).toInt() * 1024)) }
 
         Slider2(
