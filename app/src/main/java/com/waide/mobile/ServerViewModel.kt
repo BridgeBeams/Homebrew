@@ -364,15 +364,16 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            // Keep the readout as a hidden note (tiny marker in the UI, context for the model).
-            val note = Message("system", readout)
+            // Attach the readout to the user's own turn (hidden). It travels with that
+            // message, so the model keeps the image context for later questions, and there
+            // is no mid-thread system message (some chat templates reject that).
+            val withNote = userMsg.copy(visionNote = readout)
             withContext(Dispatchers.Main) {
-                _state.value = _state.value.copy(messages = _state.value.messages + note, visionBusy = false)
+                _state.value = _state.value.copy(messages = base + withNote, visionBusy = false)
             }
 
-            val forModel = base + note + userMsg   // readout sits before the question
             val budgetChars = (numCtx - REPLY_RESERVE).coerceAtLeast(1024) * 4
-            val toSend = trimToBudget(forModel, budgetChars)
+            val toSend = trimToBudget(toModel(base + withNote), budgetChars)
 
             var acc = ""
             val reply = ServerClient.chatStream(serverUrl(), _state.value.selectedModel, toSend, numCtx) { piece ->
@@ -419,7 +420,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(messages = outgoing, streaming = "", busy = true, error = null)
 
         val budgetChars = (numCtx - REPLY_RESERVE).coerceAtLeast(1024) * 4
-        val toSend = trimToBudget(outgoing, budgetChars)
+        val toSend = trimToBudget(toModel(outgoing), budgetChars)
         GenerationService.begin(getApplication())
         genJob = viewModelScope.launch(Dispatchers.IO) {
           try {
@@ -445,11 +446,24 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Fold each image turn's hidden readout into its text so the main model sees the
+    // image as plain text on its own turn. No system role is used (some chat templates
+    // require any system message to be first), so follow-up questions keep working.
+    private fun toModel(msgs: List<Message>): List<Message> = msgs.map { m ->
+        if (m.visionNote != null)
+            m.copy(
+                text = "[An image was attached. A vision model read it as:]\n" + m.visionNote +
+                       "\n\n[The user's message about the image:]\n" + m.text,
+                visionNote = null, imageB64 = null
+            )
+        else m
+    }
+
     // Rough token count for the whole thread: ~4 characters per token, plus a little
     // per-message overhead. Only used to decide whether to ask for a bigger window.
     private fun estimateTokens(msgs: List<Message>): Int {
         var chars = 0
-        for (m in msgs) chars += m.text.length + 8
+        for (m in msgs) chars += m.text.length + (m.visionNote?.length ?: 0) + 8
         return chars / 4
     }
 
