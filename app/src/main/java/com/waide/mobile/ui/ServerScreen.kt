@@ -766,6 +766,17 @@ private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
                 Spacer(Modifier.height(6.dp))
             }
         }
+        if (m.visionNote != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 4.dp)
+            ) {
+                Icon(Icons.Filled.Image, contentDescription = null, tint = W.Muted,
+                    modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("image read", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+            }
+        }
         SelectionContainer {
             Text(
                 text = m.text, color = W.Text, style = MaterialTheme.typography.bodyLarge,
