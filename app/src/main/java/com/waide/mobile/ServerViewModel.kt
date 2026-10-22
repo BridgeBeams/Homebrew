@@ -1,6 +1,10 @@
 package com.waide.mobile
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 data class ServerState(
     val messages: List<Message> = emptyList(),
@@ -34,7 +39,12 @@ data class ServerState(
     // server context window (session only; resets to the default on a cold start)
     val ctx: Int = 8192,
     val bumpTo: Int? = null,            // non-null -> ask to raise ctx to this value
-    val pendingPrompt: String? = null   // prompt held while the user decides
+    val pendingPrompt: String? = null,  // prompt held while the user decides
+    // image / vision (the + button on the Server tab)
+    val visionModel: String = "",        // model used to read images; "" = not chosen yet
+    val pendingImageB64: String? = null, // image attached and waiting to be sent
+    val visionBusy: Boolean = false,     // the vision model is reading the image right now
+    val visionPickerOpen: Boolean = false
 )
 
 /**
@@ -53,7 +63,9 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     init {
         val servers = store.loadServers()
         val active = store.getActiveServerId().ifBlank { servers.firstOrNull()?.id ?: "" }
-        _state.value = _state.value.copy(servers = servers, activeServerId = active)
+        _state.value = _state.value.copy(
+            servers = servers, activeServerId = active, visionModel = store.getVisionModel()
+        )
     }
 
     private fun activeServer(): ServerEntry? =
@@ -208,7 +220,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     fun clearChat() {
         if (_state.value.busy) return
         _state.value = _state.value.copy(messages = emptyList(), streaming = null, error = null,
-            bumpTo = null, pendingPrompt = null)
+            bumpTo = null, pendingPrompt = null, pendingImageB64 = null)
     }
 
     fun dismissError() { _state.value = _state.value.copy(error = null) }
@@ -239,15 +251,76 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(ctx = snapped.coerceAtLeast(2048))
     }
 
+    // ---------------- image / vision ----------------
+    fun openVisionPicker()  { _state.value = _state.value.copy(visionPickerOpen = true) }
+    fun closeVisionPicker() { _state.value = _state.value.copy(visionPickerOpen = false) }
+
+    // Remember the chosen image reader across restarts.
+    fun setVisionModel(name: String) {
+        store.setVisionModel(name)
+        _state.value = _state.value.copy(visionModel = name, visionPickerOpen = false)
+    }
+
+    // A photo was picked: downscale and base64-encode it off the main thread.
+    fun attachImage(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val b64 = runCatching { uriToBase64(uri) }.getOrNull()
+            withContext(Dispatchers.Main) {
+                _state.value = if (b64 == null)
+                    _state.value.copy(error = "Couldn't read that image.")
+                else
+                    _state.value.copy(pendingImageB64 = b64, error = null)
+            }
+        }
+    }
+
+    fun clearImage() { _state.value = _state.value.copy(pendingImageB64 = null) }
+
+    private fun uriToBase64(uri: Uri): String {
+        val ctx = getApplication<Application>()
+        val bmp = ctx.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
+            ?: throw IllegalStateException("decode failed")
+        val scaled = scaleDown(bmp, 1024)
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+        return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+    }
+
+    private fun scaleDown(bmp: Bitmap, maxDim: Int): Bitmap {
+        val m = maxOf(bmp.width, bmp.height)
+        if (m <= maxDim) return bmp
+        val s = maxDim.toFloat() / m
+        return Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+    }
+
+    private fun visionInstruction(prompt: String): String =
+        "You are reading an image for another assistant that cannot see it. " +
+        "Transcribe ALL visible text exactly, including headings, numbers, labels, and fine print. " +
+        "Then briefly describe any photos, objects, people, charts, and the layout. " +
+        "The user will ask: \"" + prompt + "\" so be sure to capture anything relevant. " +
+        "Do not answer the question yourself; only report what is in the image."
+
     fun send(text: String) {
-        val prompt = text.trim()
-        if (prompt.isEmpty() || _state.value.busy) return
+        if (_state.value.busy) return
+        val img = _state.value.pendingImageB64
+        var prompt = text.trim()
+        if (prompt.isEmpty() && img == null) return
         if (_state.value.selectedModel.isBlank()) {
             _state.value = _state.value.copy(error = "Pick a model first (tap Refresh if the list is empty).")
             return
         }
-        // Would this prompt plus the running thread overflow the current window? If
-        // so, ask before leaning harder on the GPU instead of silently trimming.
+        // Image attached: hand it to the vision model first, then let the main model answer.
+        if (img != null) {
+            if (_state.value.visionModel.isBlank()) {
+                _state.value = _state.value.copy(visionPickerOpen = true)
+                return
+            }
+            if (prompt.isEmpty()) prompt = "What's in this image?"
+            sendWithImage(prompt, img)
+            return
+        }
+        // Text only: would this prompt plus the running thread overflow the current
+        // window? If so, ask before leaning harder on the GPU instead of silently trimming.
         val projected = _state.value.messages + Message("user", prompt)
         val needed = estimateTokens(projected) + REPLY_RESERVE
         val cur = _state.value.ctx
@@ -259,6 +332,68 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         runSend(prompt, cur)
+    }
+
+    // Two-model flow: the vision model reads the image into text, that readout is kept
+    // in the thread as a hidden note, and the main model answers using it. Follow-up
+    // questions still work because the note stays in the conversation.
+    private fun sendWithImage(prompt: String, imageB64: String) {
+        val visionModel = _state.value.visionModel
+        val base = _state.value.messages
+        val userMsg = Message("user", prompt, imageB64 = imageB64)
+        _state.value = _state.value.copy(
+            messages = base + userMsg, pendingImageB64 = null,
+            streaming = "", busy = true, visionBusy = true, error = null
+        )
+        val numCtx = _state.value.ctx
+        GenerationService.begin(getApplication())
+        genJob = viewModelScope.launch(Dispatchers.IO) {
+          try {
+            val readout = runCatching {
+                ServerClient.describeImage(serverUrl(), visionModel, imageB64, visionInstruction(prompt))
+            }.getOrNull()
+
+            // Hard failures (error, timeout, empty) -> clean "Error reading image."
+            if (readout.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(
+                        messages = _state.value.messages + Message("assistant", "Error reading image."),
+                        streaming = null, busy = false, visionBusy = false
+                    )
+                }
+                return@launch
+            }
+
+            // Keep the readout as a hidden note (tiny marker in the UI, context for the model).
+            val note = Message("system", readout)
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(messages = _state.value.messages + note, visionBusy = false)
+            }
+
+            val forModel = base + note + userMsg   // readout sits before the question
+            val budgetChars = (numCtx - REPLY_RESERVE).coerceAtLeast(1024) * 4
+            val toSend = trimToBudget(forModel, budgetChars)
+
+            var acc = ""
+            val reply = ServerClient.chatStream(serverUrl(), _state.value.selectedModel, toSend, numCtx) { piece ->
+                acc += piece
+                _state.value = _state.value.copy(streaming = acc)
+            }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }),
+                    streaming = null, busy = false
+                )
+            }
+          } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(busy = false, streaming = null, visionBusy = false,
+                    error = e.message ?: "Server error.")
+            }
+          } finally {
+            GenerationService.end(getApplication())
+          }
+        }
     }
 
     // User agreed to the larger window: raise it for this conversation and send.

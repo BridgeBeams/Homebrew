@@ -187,7 +187,12 @@ private fun Shell(
                     onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
                     onSelectServer = { svm.selectServer(it) },
                     onConfirmBump = { svm.confirmBump() },
-                    onDeclineBump = { svm.declineBump() }
+                    onDeclineBump = { svm.declineBump() },
+                    onImagePicked = { svm.attachImage(it) },
+                    onClearImage = { svm.clearImage() },
+                    onOpenVisionPicker = { svm.openVisionPicker() },
+                    onCloseVisionPicker = { svm.closeVisionPicker() },
+                    onSetVisionModel = { svm.setVisionModel(it) }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,

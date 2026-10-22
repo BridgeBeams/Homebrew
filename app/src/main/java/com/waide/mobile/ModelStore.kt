@@ -103,6 +103,10 @@ class ModelStore(context: Context) {
     fun getActiveServerId(): String = prefs.getString("activeServer", "") ?: ""
     fun setActiveServerId(id: String) { prefs.edit().putString("activeServer", id).apply() }
 
+    // The vision model used to read attached images (remembered across restarts).
+    fun getVisionModel(): String = prefs.getString("visionModel", "") ?: ""
+    fun setVisionModel(name: String) { prefs.edit().putString("visionModel", name).apply() }
+
     companion object {
         /**
          * Looks for .gguf files in the folders a phone actually puts downloads in,

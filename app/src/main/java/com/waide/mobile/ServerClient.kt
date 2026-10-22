@@ -169,6 +169,46 @@ object ServerClient {
     }
 
     /**
+     * POST {base}/api/chat (non-streaming) to a VISION model with one image.
+     * Returns the model's text readout of the image. Throws on network/HTTP error.
+     * The image must be raw base64 (no data: prefix), which is what Ollama expects.
+     */
+    fun describeImage(base: String, model: String, imageB64: String, instruction: String): String {
+        val b = normalize(base)
+        if (b.isEmpty()) throw IllegalStateException("No server address set.")
+
+        val msg = JSONObject()
+            .put("role", "user")
+            .put("content", instruction)
+            .put("images", JSONArray().put(imageB64))
+        val payload = JSONObject()
+            .put("model", model)
+            .put("messages", JSONArray().put(msg))
+            .put("stream", false)
+            .put("options", JSONObject().put("num_ctx", 4096))
+            .toString()
+
+        val conn = (URL("$b/api/chat").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 10000
+            readTimeout = 180000 // vision can be slow on a 7B over the tunnel
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(payload); it.flush() }
+            if (conn.responseCode != 200) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                throw IllegalStateException("Vision model returned ${conn.responseCode}${if (err != null) ": $err" else ""}")
+            }
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            return JSONObject(body).optJSONObject("message")?.optString("content")?.trim().orEmpty()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
      * POST {base}/api/chat (streaming). Calls onToken for each chunk of text.
      * Returns the full reply. Throws on network/HTTP error.
      */

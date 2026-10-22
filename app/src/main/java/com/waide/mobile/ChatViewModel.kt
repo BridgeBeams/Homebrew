@@ -12,8 +12,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class Message(
-    val role: String,      // "user" or "assistant"
-    val text: String
+    val role: String,            // "user", "assistant", or "system" (a hidden image-read note)
+    val text: String,
+    val imageB64: String? = null // set on a Server-tab turn that had a photo attached (thumbnail)
 )
 
 data class ChatState(
