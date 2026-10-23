@@ -66,6 +66,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             servers = servers, activeServerId = active, visionModel = store.getVisionModel()
         )
+        // Auto-load the server's models on first open so the user doesn't have to tap refresh.
+        if (serverUrl().isNotBlank()) refreshModels()
     }
 
     private fun activeServer(): ServerEntry? =
