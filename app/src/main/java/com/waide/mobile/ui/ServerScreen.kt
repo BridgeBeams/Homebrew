@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -105,33 +107,27 @@ fun ServerScreen(
 
     Column(modifier.fillMaxSize()) {
 
-        // Machine picker
-        Row(
-            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Compact header: machine + model pickers and status, kept tight to leave
+        // the most room for the chat itself.
+        Column(Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 2.dp)) {
             if (state.servers.isEmpty()) {
                 Text("No machine set. Add one in Settings.", color = W.Muted,
-                    style = MaterialTheme.typography.labelMedium)
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(vertical = 6.dp))
             } else {
-                ExposedDropdownMenuBox(
-                    expanded = machineMenu,
-                    onExpandedChange = { machineMenu = !machineMenu },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = activeServer?.name ?: "Pick a machine",
-                        onValueChange = {}, readOnly = true, singleLine = true,
-                        label = { Text("Machine", color = W.Muted) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = machineMenu) },
-                        modifier = Modifier.menuAnchor().fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
-                            focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
-                            focusedTextColor = W.Text, unfocusedTextColor = W.Text
-                        )
-                    )
-                    ExposedDropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
+                Box {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { machineMenu = true }.padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Machine", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                        Spacer(Modifier.width(10.dp))
+                        Text(activeServer?.name ?: "Pick a machine", color = W.Text,
+                            style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Pick machine", tint = W.Muted)
+                    }
+                    DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
                         state.servers.forEach { s ->
                             DropdownMenuItem(
                                 text = { Text(s.name, color = if (s.id == state.activeServerId) W.Amber else W.Text) },
@@ -141,71 +137,62 @@ fun ServerScreen(
                     }
                 }
             }
-        }
-        HorizontalDivider(color = W.Line)
 
-        // Model picker + refresh
-        Row(
-            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ExposedDropdownMenuBox(
-                expanded = menuOpen,
-                onExpandedChange = { menuOpen = !menuOpen },
-                modifier = Modifier.weight(1f)
-            ) {
-                OutlinedTextField(
-                    value = state.selectedModel.ifBlank { "No model" },
-                    onValueChange = {},
-                    readOnly = true,
-                    singleLine = true,
-                    label = { Text("Server model", color = W.Muted) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuOpen) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
-                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
-                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
-                    )
-                )
-                ExposedDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (state.models.isEmpty()) {
-                        DropdownMenuItem(text = { Text("No models. Tap Refresh.") }, onClick = { menuOpen = false })
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { menuOpen = true }.padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Model", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                        Spacer(Modifier.width(10.dp))
+                        Text(state.selectedModel.ifBlank { "No model" }, color = W.Text,
+                            style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Pick model", tint = W.Muted)
                     }
-                    state.models.forEach { m ->
-                        DropdownMenuItem(
-                            text = { Text(m, color = if (m == state.selectedModel) W.Amber else W.Text) },
-                            onClick = { onSelectModel(m); menuOpen = false }
-                        )
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        if (state.models.isEmpty()) {
+                            DropdownMenuItem(text = { Text("No models. Tap refresh.") }, onClick = { menuOpen = false })
+                        }
+                        state.models.forEach { m ->
+                            DropdownMenuItem(
+                                text = { Text(m, color = if (m == state.selectedModel) W.Amber else W.Text) },
+                                onClick = { onSelectModel(m); menuOpen = false }
+                            )
+                        }
                     }
                 }
+                Spacer(Modifier.width(6.dp))
+                IconButton(onClick = onRefreshModels, modifier = Modifier.size(34.dp)) {
+                    if (state.loadingModels)
+                        CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
+                    else
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh models", tint = W.Amber)
+                }
+                TextButton(onClick = { managing = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                    Text("Manage", color = W.Muted)
+                }
             }
-            Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onRefreshModels) {
-                if (state.loadingModels)
-                    CircularProgressIndicator(Modifier.size(20.dp), color = W.Amber, strokeWidth = 2.dp)
-                else
-                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh models", tint = W.Amber)
-            }
-            TextButton(onClick = { managing = true }) { Text("Manage", color = W.Muted) }
-        }
-        // status line
-        Row(
-            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 16.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                when {
-                    !hasServerUrl -> "Set your server address in Settings"
-                    state.connected -> "Connected · private · nothing saved"
-                    else -> "Not connected · tap Refresh"
-                },
-                color = if (state.connected) W.Muted else W.Danger,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.weight(1f)
-            )
-            if (state.messages.isNotEmpty()) {
-                TextButton(onClick = onClear, enabled = !state.busy) { Text("Clear", color = W.Muted) }
+
+            Row(Modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        !hasServerUrl -> "Set your server address in Settings"
+                        state.connected -> "Connected · private · nothing saved"
+                        else -> "Not connected · tap refresh"
+                    },
+                    color = if (state.connected) W.Muted else W.Danger,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f)
+                )
+                if (state.messages.isNotEmpty()) {
+                    TextButton(onClick = onClear, enabled = !state.busy,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                        Text("Clear", color = W.Muted)
+                    }
+                }
             }
         }
         HorizontalDivider(color = W.Line)
@@ -286,7 +273,7 @@ fun ServerScreen(
             }
 
             Row(
-                Modifier.padding(10.dp),
+                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
                 // Attach a photo. First time (no reader chosen) this opens the reader picker.
