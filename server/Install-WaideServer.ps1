@@ -88,13 +88,19 @@ if (Test-Path $ollamaApp) { Start-Process $ollamaApp } else { try { Start-Proces
 Start-Sleep -Seconds 4
 
 # --- Python (for the conversations service) ---
+# Searches the normal install spot AND the new Windows "Python install manager"
+# location (pythoncore-*), which is where recent Python builds land.
 function Find-Py([string]$exe) {
     $c = Get-Command $exe -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
-    $hit = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\$exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
-    if ($hit) { return $hit.FullName }
-    $hit2 = Get-ChildItem "C:\Python3*\$exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
-    if ($hit2) { return $hit2.FullName }
+    foreach ($pat in @(
+        "$env:LOCALAPPDATA\Programs\Python\Python3*\$exe",
+        "$env:LOCALAPPDATA\Python\pythoncore-*\$exe",
+        "C:\Python3*\$exe"
+    )) {
+        $hit = Get-ChildItem $pat -ErrorAction SilentlyContinue | Select-Object -Last 1
+        if ($hit) { return $hit.FullName }
+    }
     return $null
 }
 
@@ -111,11 +117,7 @@ if (-not $python) {
     Read-Host "Press Enter to close"; exit 1
 }
 Say "Python: $python" Green
-
-Say "Installing the service's libraries..." Cyan
-& $python -m pip install --upgrade pip 2>$null | Out-Null
-& $python -m pip install fastapi "uvicorn[standard]" requests numpy 2>$null
-Say "Libraries installed." Green
+Say "No extra libraries needed; the service uses only Python's standard library." Green
 
 # --- configure + register the conversations service ---
 $svc = Join-Path $PSScriptRoot "waide_server.py"
