@@ -107,6 +107,10 @@ class ModelStore(context: Context) {
     fun getVisionModel(): String = prefs.getString("visionModel", "") ?: ""
     fun setVisionModel(name: String) { prefs.edit().putString("visionModel", name).apply() }
 
+    // Last model used on the private Conversations side (remembered across restarts).
+    fun getConvModel(): String = prefs.getString("convModel", "") ?: ""
+    fun setConvModel(name: String) { prefs.edit().putString("convModel", name).apply() }
+
     companion object {
         /**
          * Looks for .gguf files in the folders a phone actually puts downloads in,

@@ -1,0 +1,195 @@
+package com.waide.mobile
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * Talks to the private Conversations service on your PC (port 11435 over Tailscale).
+ * Everything except the PIN check needs the token returned by auth(). Standard
+ * HttpURLConnection, no third-party libraries, same as ServerClient.
+ */
+data class ConvSummary(val id: String, val title: String, val updated: Double, val count: Int, val hidden: Boolean = false)
+data class ConvMsg(val id: String, val role: String, val text: String)
+data class LoginInfo(
+    val token: String,
+    val lastLogin: Double?,
+    val failedAttempts: List<Double>,
+    val failedCount: Int
+)
+
+object ConversationsClient {
+
+    /** Derive the conversations base (port 11435) from a machine's Ollama URL. */
+    fun baseFrom(ollamaUrl: String): String {
+        var u = ollamaUrl.trim()
+        if (u.isEmpty()) return u
+        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
+        u = u.trimEnd('/')
+        u = Regex(":\\d+$").replace(u, "")   // drop any trailing :port
+        return "$u:11435"
+    }
+
+    private fun open(url: String, method: String, token: String?): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = method
+        c.connectTimeout = 8000
+        c.readTimeout = 15000
+        if (token != null) c.setRequestProperty("Authorization", "Bearer $token")
+        return c
+    }
+
+    private fun fail(c: HttpURLConnection): Nothing {
+        val body = runCatching { c.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+        val detail = runCatching { JSONObject(body ?: "").optString("detail") }.getOrNull()
+        throw IllegalStateException(if (!detail.isNullOrBlank()) detail else "error ${c.responseCode}")
+    }
+
+    fun auth(base: String, pin: String): LoginInfo {
+        val c = open("$base/auth", "POST", null)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pin", pin).toString()) }
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        val fa = ArrayList<Double>()
+        o.optJSONArray("failed_attempts")?.let { for (i in 0 until it.length()) fa.add(it.optDouble(i)) }
+        return LoginInfo(
+            token = o.getString("token"),
+            lastLogin = if (o.isNull("last_login")) null else o.optDouble("last_login"),
+            failedAttempts = fa,
+            failedCount = o.optInt("failed_count", 0)
+        )
+    }
+
+    fun changePin(base: String, token: String, oldPin: String, newPin: String) {
+        val c = open("$base/auth/change", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("old_pin", oldPin).put("new_pin", newPin).toString())
+        }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun models(base: String, token: String): List<String> {
+        val c = open("$base/models", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map { arr.getString(it) }
+    }
+
+    fun list(base: String, token: String): List<ConvSummary> {
+        val c = open("$base/conversations", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            ConvSummary(o.getString("id"), o.optString("title", "Untitled"),
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false))
+        }
+    }
+
+    fun hide(base: String, token: String, id: String) {
+        val c = open("$base/conversations/$id/hide", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write("{}") }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun unhide(base: String, token: String, id: String, pin: String) {
+        val c = open("$base/conversations/$id/unhide", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pin", pin).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Unhide every hidden conversation. Needs only the PIN (works from Settings). */
+    fun unhideAll(base: String, pin: String): Int {
+        val c = open("$base/conversations/unhide-all", "POST", null)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pin", pin).toString()) }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optInt("unhidden", 0)
+    }
+
+    fun create(base: String, token: String, title: String?): String {
+        val c = open("$base/conversations", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().apply { if (title != null) put("title", title) }.toString())
+        }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun get(base: String, token: String, id: String): Pair<String, List<ConvMsg>> {
+        val c = open("$base/conversations/$id", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        val msgs = ArrayList<ConvMsg>()
+        o.optJSONArray("messages")?.let {
+            for (i in 0 until it.length()) {
+                val m = it.getJSONObject(i)
+                msgs.add(ConvMsg(m.optString("id"), m.optString("role"), m.optString("text")))
+            }
+        }
+        return Pair(o.optString("title", "Untitled"), msgs)
+    }
+
+    fun rename(base: String, token: String, id: String, title: String) {
+        val c = open("$base/conversations/$id/rename", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("title", title).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteConv(base: String, token: String, id: String) {
+        val c = open("$base/conversations/$id", "DELETE", token)
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteMsg(base: String, token: String, id: String, mid: String) {
+        val c = open("$base/conversations/$id/messages/$mid", "DELETE", token)
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Streams the assistant reply as plain text chunks. Returns the full reply. */
+    fun chatStream(
+        base: String, token: String, id: String,
+        model: String, content: String, numCtx: Int,
+        onToken: (String) -> Unit
+    ): String {
+        val c = open("$base/conversations/$id/chat", "POST", token)
+        c.doOutput = true
+        c.readTimeout = 0 // streaming
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("model", model).put("content", content).put("num_ctx", numCtx).toString())
+        }
+        if (c.responseCode != 200) fail(c)
+        val sb = StringBuilder()
+        BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
+            val buf = CharArray(512)
+            while (true) {
+                val n = reader.read(buf)
+                if (n == -1) break
+                if (n > 0) {
+                    val piece = String(buf, 0, n)
+                    sb.append(piece)
+                    onToken(piece)
+                }
+            }
+        }
+        return sb.toString()
+    }
+}

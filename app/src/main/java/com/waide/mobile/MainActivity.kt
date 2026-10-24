@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -30,6 +31,7 @@ import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.waide.mobile.ui.ChatScreen
+import com.waide.mobile.ui.ConversationsScreen
 import com.waide.mobile.ui.ModelsScreen
 import com.waide.mobile.ui.ServerScreen
 import com.waide.mobile.ui.SettingsScreen
@@ -40,12 +42,13 @@ class MainActivity : ComponentActivity() {
 
     private val vm: ChatViewModel by viewModels()
     private val svm: ServerViewModel by viewModels()
+    private val cvm: ConversationsViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         maybeAskNotifications()
-        setContent { WaideTheme { Shell(vm, svm, ::hasAllFiles, ::requestAllFiles) } }
+        setContent { WaideTheme { Shell(vm, svm, cvm, ::hasAllFiles, ::requestAllFiles) } }
     }
 
     // The "working" notification needs this on Android 13+. If denied, generation
@@ -77,6 +80,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     Chat("Chat", Icons.Filled.Chat),
     Models("Models", Icons.Filled.Memory),
     Server("Server", Icons.Filled.Cloud),
+    Convos("Convos", Icons.Filled.Lock),
     Settings("Settings", Icons.Filled.Tune)
 }
 
@@ -84,6 +88,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 private fun Shell(
     vm: ChatViewModel,
     svm: ServerViewModel,
+    cvm: ConversationsViewModel,
     hasAllFiles: () -> Boolean,
     requestAllFiles: () -> Unit
 ) {
@@ -94,9 +99,11 @@ private fun Shell(
     val settings by vm.settings.collectAsState()
     val models by vm.models.collectAsState()
     val serverState by svm.state.collectAsState()
+    val convState by cvm.state.collectAsState()
 
     // Re-check permission and rescan whenever the app comes back to the front,
     // which is exactly when a download has just finished or access was granted.
+    // Also re-lock the Conversations side whenever the app goes to the background.
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
         val obs = LifecycleEventObserver { _, event ->
@@ -104,9 +111,17 @@ private fun Shell(
                 storageOk = hasAllFiles()
                 vm.refreshModels()
             }
+            if (event == Lifecycle.Event.ON_STOP) {
+                cvm.lock()
+            }
         }
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+
+    // Leaving the Conversations tab locks it again (nothing stays unlocked in the background).
+    LaunchedEffect(tab) {
+        if (tab != Tab.Convos) cvm.lock()
     }
 
     Scaffold(
@@ -194,6 +209,24 @@ private fun Shell(
                     onCloseVisionPicker = { svm.closeVisionPicker() },
                     onSetVisionModel = { svm.setVisionModel(it) }
                 )
+                Tab.Convos -> ConversationsScreen(
+                    state = convState,
+                    onUnlock = { cvm.unlock(it) },
+                    onRefreshList = { cvm.refreshList() },
+                    onOpen = { cvm.openConversation(it) },
+                    onNew = { cvm.newConversation() },
+                    onClose = { cvm.closeConversation() },
+                    onSend = { cvm.send(it) },
+                    onStop = { cvm.stopGeneration() },
+                    onRename = { id, t -> cvm.renameConversation(id, t) },
+                    onDeleteConv = { cvm.deleteConversation(it) },
+                    onDeleteMsg = { cvm.deleteMessage(it) },
+                    onSelectModel = { cvm.selectModel(it) },
+                    onHide = { cvm.hideConversation(it) },
+                    onRequestUnhide = { cvm.requestUnhide(it) },
+                    onSubmitUnhide = { cvm.submitUnhide(it) },
+                    onCancelUnhide = { cvm.cancelUnhide() }
+                )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
                     onChange = { vm.updateSettings(it) },
@@ -201,7 +234,8 @@ private fun Shell(
                     onAddServer = { n, u -> svm.addServer(n, u) },
                     onRemoveServer = { svm.removeServer(it) },
                     serverCtx = serverState.ctx,
-                    onServerCtxChange = { svm.setCtx(it) }
+                    onServerCtxChange = { svm.setCtx(it) },
+                    onUnhideAll = { pin, cb -> cvm.unhideAll(pin, cb) }
                 )
             }
         }
