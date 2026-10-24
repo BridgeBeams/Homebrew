@@ -1,10 +1,19 @@
 package com.waide.mobile.ui
 
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,9 +25,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -26,13 +38,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.waide.mobile.ConvHit
 import com.waide.mobile.ConvMsg
 import com.waide.mobile.ConvState
 import com.waide.mobile.ConvSummary
@@ -55,13 +75,18 @@ fun ConversationsScreen(
     onRequestUnhide: (String) -> Unit,
     onSubmitUnhide: (String) -> Unit,
     onCancelUnhide: () -> Unit,
+    onImagePicked: (Uri) -> Unit,
+    onClearImage: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when {
         state.locked -> PinGate(state, onUnlock, modifier)
         state.openId == null -> ConvList(state, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
-            onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, modifier)
-        else -> ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onSelectModel, onRename, onDeleteConv, modifier)
+            onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch, modifier)
+        else -> ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onSelectModel, onRename,
+            onDeleteConv, onImagePicked, onClearImage, modifier)
     }
 }
 
@@ -130,11 +155,14 @@ private fun ConvList(
     onRequestUnhide: (String) -> Unit,
     onSubmitUnhide: (String) -> Unit,
     onCancelUnhide: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearSearch: () -> Unit,
     modifier: Modifier
 ) {
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renameFor by remember { mutableStateOf<ConvSummary?>(null) }
     var deleteFor by remember { mutableStateOf<ConvSummary?>(null) }
+    val searchMode = state.query.isNotBlank()
 
     Column(modifier.fillMaxSize()) {
         Row(
@@ -157,6 +185,31 @@ private fun ConvList(
                 Text("New", color = Color(0xFF1A1204))
             }
         }
+
+        // keyword search box
+        OutlinedTextField(
+            value = state.query,
+            onValueChange = onSearch,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Search conversations", color = W.Muted) },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = W.Muted) },
+            trailingIcon = {
+                if (searchMode) {
+                    if (state.searching)
+                        CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
+                    else IconButton(onClick = onClearSearch) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear", tint = W.Muted)
+                    }
+                }
+            },
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                focusedTextColor = W.Text, unfocusedTextColor = W.Text
+            )
+        )
         HorizontalDivider(color = W.Line)
 
         state.error?.let {
@@ -164,7 +217,39 @@ private fun ConvList(
                 modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(12.dp))
         }
 
-        if (state.conversations.isEmpty()) {
+        if (searchMode) {
+            // search results (hidden conversations are excluded by the server)
+            if (state.results.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (state.searching) "Searching..." else "No matches for \"${state.query}\".",
+                        color = W.Muted, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 40.dp)
+                    )
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    items(state.results) { h ->
+                        Column(
+                            Modifier.fillMaxWidth().clickable { onOpen(h.id) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Text(h.title, color = W.Text, style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (h.snippet.isNotBlank()) {
+                                Spacer(Modifier.height(3.dp))
+                                Text(h.snippet, color = W.Muted, style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Spacer(Modifier.height(3.dp))
+                            Text("${fmtTime(h.updated)}  ·  ${h.count} messages",
+                                color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                        }
+                        HorizontalDivider(color = W.Line)
+                    }
+                }
+            }
+        } else if (state.conversations.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
                     if (state.loadingList) "Loading..." else "No conversations yet. Tap New to start one.",
@@ -294,6 +379,8 @@ private fun ConvChat(
     onSelectModel: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDeleteConv: (String) -> Unit,
+    onImagePicked: (Uri) -> Unit,
+    onClearImage: () -> Unit,
     modifier: Modifier
 ) {
     var draft by remember { mutableStateOf("") }
@@ -302,8 +389,13 @@ private fun ConvChat(
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     var deleteMsgId by remember { mutableStateOf<String?>(null) }
+    var zoomB64 by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val streamingText = state.streaming
+
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) onImagePicked(uri) }
 
     val itemCount = state.messages.size + if (streamingText != null) 1 else 0
     LaunchedEffect(itemCount, streamingText?.length) {
@@ -341,7 +433,7 @@ private fun ConvChat(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> ConvBubble(m) { deleteMsgId = m.id } }
+                items(state.messages) { m -> ConvBubble(m, onImageTap = { zoomB64 = it }) { deleteMsgId = m.id } }
                 if (streamingText != null) item { ConvBubble(ConvMsg("streaming", "assistant", streamingText.ifBlank { "..." })) {} }
             }
         }
@@ -376,7 +468,39 @@ private fun ConvChat(
                     }
                 }
             }
+            // pending image preview (a photo chosen but not yet sent)
+            state.pendingImageB64?.let { b64 ->
+                val bmp = remember(b64) { decodeB64(b64) }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp, contentDescription = "Attached image",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(44.dp)
+                                .clickable { zoomB64 = b64 }
+                                .border(1.dp, W.Line, RoundedCornerShape(4.dp))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text("Image attached", color = W.Muted, style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = onClearImage) { Text("Remove", color = W.Danger) }
+                }
+            }
             Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
+                FilledIconButton(
+                    onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = W.SurfaceHi, contentColor = W.Amber
+                    ),
+                    modifier = Modifier.size(52.dp)
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Attach image")
+                }
+                Spacer(Modifier.width(8.dp))
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -392,7 +516,7 @@ private fun ConvChat(
                 Spacer(Modifier.width(8.dp))
                 FilledIconButton(
                     onClick = { if (state.busy) onStop() else { val t = draft; draft = ""; onSend(t) } },
-                    enabled = state.busy || draft.isNotBlank(),
+                    enabled = state.busy || draft.isNotBlank() || state.pendingImageB64 != null,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = W.Amber, contentColor = Color(0xFF1A1204),
                         disabledContainerColor = W.SurfaceHi
@@ -433,11 +557,40 @@ private fun ConvChat(
             containerColor = W.Surface
         )
     }
+    zoomB64?.let { b64 -> ImageZoomDialog(b64) { zoomB64 = null } }
+}
+
+/** Full-screen pinch/drag zoom for an attached image. Tap outside or back to close. */
+@Composable
+private fun ImageZoomDialog(b64: String, onDismiss: () -> Unit) {
+    val bmp = remember(b64) { decodeB64(b64) } ?: return
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val transform = rememberTransformableState { zoomChange, panChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 6f)
+        offset += panChange
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier.fillMaxSize().background(Color(0xE6000000)).clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap = bmp, contentDescription = "Full image", contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(8.dp)
+                    .graphicsLayer(
+                        scaleX = scale, scaleY = scale,
+                        translationX = offset.x, translationY = offset.y
+                    )
+                    .transformable(transform)
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConvBubble(m: ConvMsg, onLongPress: () -> Unit) {
+private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     // Long-press a message to delete just it. (No text-selection wrapper here, since
     // it would swallow the long-press.)
@@ -445,16 +598,41 @@ private fun ConvBubble(m: ConvMsg, onLongPress: () -> Unit) {
         Text(if (isUser) "YOU" else "WAIDE", style = MaterialTheme.typography.labelSmall,
             color = if (isUser) W.Muted else W.Amber)
         Spacer(Modifier.height(5.dp))
-        Text(
-            text = m.text, color = W.Text, style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.fillMaxWidth().then(
-                if (isUser) Modifier.border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                    .background(W.Surface, RoundedCornerShape(4.dp)).padding(12.dp)
-                else Modifier.padding(start = 2.dp)
+        m.imageB64?.let { b64 ->
+            val bmp = remember(b64) { decodeB64(b64) }
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp, contentDescription = "Attached image",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.sizeIn(maxHeight = 220.dp).fillMaxWidth(0.7f)
+                        .clickable { onImageTap(b64) }
+                        .border(1.dp, W.Line, RoundedCornerShape(6.dp))
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+        if (m.hasVision) {
+            Text("image read", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+            Spacer(Modifier.height(4.dp))
+        }
+        if (m.text.isNotBlank()) {
+            Text(
+                text = m.text, color = W.Text, style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.fillMaxWidth().then(
+                    if (isUser) Modifier.border(1.dp, W.Line, RoundedCornerShape(4.dp))
+                        .background(W.Surface, RoundedCornerShape(4.dp)).padding(12.dp)
+                    else Modifier.padding(start = 2.dp)
+                )
             )
-        )
+        }
     }
 }
+
+/** Decode a base64 JPEG/PNG into an ImageBitmap for Compose. Returns null on failure. */
+private fun decodeB64(b64: String): ImageBitmap? = runCatching {
+    val bytes = Base64.decode(b64, Base64.DEFAULT)
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()
 
 @Composable
 private fun RenameDialog(current: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
