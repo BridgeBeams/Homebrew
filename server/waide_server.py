@@ -191,18 +191,61 @@ def do_change_pin(old_pin, new_pin):
 
 
 # ---------------------------------------------------------------- Ollama (via urllib)
+# Ollama is often bound to the Tailscale address rather than localhost, so try a
+# few addresses and remember whichever one answers.
+_ollama_cache = {"base": None}
+
+
+def _ollama_candidates():
+    cands = []
+    w = os.environ.get("WAIDE_OLLAMA", "").strip()
+    if w:
+        cands.append(w.rstrip("/"))
+    cands.append("http://127.0.0.1:11434")
+    cands.append("http://localhost:11434")
+    oh = os.environ.get("OLLAMA_HOST", "").strip()
+    if oh and not oh.startswith("0.0.0.0"):
+        if not oh.startswith("http"):
+            oh = "http://" + oh
+        cands.append(oh.rstrip("/"))
+    seen, out = set(), []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def ollama_base():
+    if _ollama_cache["base"]:
+        return _ollama_cache["base"]
+    cands = _ollama_candidates()
+    for c in cands:
+        try:
+            with urllib.request.urlopen(f"{c}/api/version", timeout=3) as r:
+                r.read()
+            _ollama_cache["base"] = c
+            return c
+        except Exception:
+            continue
+    return cands[0]
+
+
 def ollama_tags():
+    base = ollama_base()
     try:
-        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=10) as r:
+        with urllib.request.urlopen(f"{base}/api/tags", timeout=10) as r:
             data = json.loads(r.read().decode("utf-8"))
         return sorted(m["name"] for m in data.get("models", []))
     except Exception as e:
-        raise ApiError(502, f"cannot reach Ollama: {e}")
+        _ollama_cache["base"] = None   # re-probe next time
+        raise ApiError(502, f"cannot reach Ollama ({base}): {e}")
 
 
 def ollama_chat_stream(payload, on_piece):
+    base = ollama_base()
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(f"{OLLAMA}/api/chat", data=data,
+    req = urllib.request.Request(f"{base}/api/chat", data=data,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as r:
         for raw in r:

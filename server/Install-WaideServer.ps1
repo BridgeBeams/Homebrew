@@ -132,26 +132,28 @@ if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir -Fo
 
 $pythonw = Find-Py "pythonw.exe"
 if (-not $pythonw) { $pythonw = $python }
+$watchdog = Join-Path $PSScriptRoot "waide_watchdog.py"
 
-# Start it on every logon.
+# Start the watchdog on every logon. It runs hidden (pythonw) and relaunches the
+# service within seconds if it ever exits, so there's no window and no babysitting.
 try {
-    $action  = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$svc`""
+    $action  = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$watchdog`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     Register-ScheduledTask -TaskName "wAide Conversations" -Action $action -Trigger $trigger `
-        -Force -RunLevel Limited -Description "wAide private conversations service" | Out-Null
-    Say "Service set to start at logon." Green
+        -Force -RunLevel Limited -Description "wAide private conversations service (watchdog)" | Out-Null
+    Say "Service set to start (hidden, self-healing) at logon." Green
 } catch { Say "Could not register the startup task: $_" Red }
 
-# Start it right now (in this session, with the address already set).
+# Start it right now, hidden, in this session. Ollama is found automatically by the
+# service (OLLAMA_HOST is already set above), so no WAIDE_OLLAMA is needed.
 $env:WAIDE_HOST = $tsip
-$env:WAIDE_OLLAMA = "http://127.0.0.1:11434"
 $env:WAIDE_PORT = "11435"
 try {
-    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*waide_server.py*" } |
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*waide_server.py*" -or $_.CommandLine -like "*waide_watchdog.py*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Process $pythonw -ArgumentList "`"$svc`""
-    Say "Conversations service started on $($tsip):11435" Green
+    Start-Process $pythonw -ArgumentList "`"$watchdog`"" -WindowStyle Hidden
+    Say "Conversations service started (hidden) on $($tsip):11435" Green
 } catch { Say "Could not start the service now: $_" Red }
 
 # --- models drop folder ---

@@ -24,6 +24,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
 Source: "waide_server.py";          DestDir: "{app}"; Flags: ignoreversion
+Source: "waide_watchdog.py";        DestDir: "{app}"; Flags: ignoreversion
 Source: "Install-WaideServer.ps1";  DestDir: "{app}"; Flags: ignoreversion
 Source: "import-models.ps1";        DestDir: "{app}"; Flags: ignoreversion
 Source: "default-models.txt";       DestDir: "{app}"; Flags: ignoreversion
