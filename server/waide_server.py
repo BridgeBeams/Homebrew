@@ -260,6 +260,32 @@ def ollama_chat_stream(payload, on_piece):
                 break
 
 
+def _vision_instruction(prompt):
+    return ("You are reading an image for another assistant that cannot see it. "
+            "Transcribe ALL visible text exactly, including headings, numbers, labels, "
+            "and fine print. Then briefly describe any photos, objects, people, charts, "
+            "and the layout. The user will ask: \"" + prompt + "\" so be sure to capture "
+            "anything relevant. Do not answer the question yourself; only report what is "
+            "in the image.")
+
+
+def ollama_describe(model, image_b64, instruction):
+    """One-shot (non-streaming) vision read of an image. Returns the readout text."""
+    base = ollama_base()
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": instruction, "images": [image_b64]}],
+        "stream": False,
+        "options": {"num_ctx": 4096},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(f"{base}/api/chat", data=data,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        obj = json.loads(r.read().decode("utf-8"))
+    return obj.get("message", {}).get("content", "").strip()
+
+
 # ---------------------------------------------------------------- conversation store
 _store_lock = threading.Lock()
 
@@ -293,6 +319,57 @@ def list_convs():
                         "hidden": hidden,
                         "updated": c.get("updated", 0),
                         "count": len(c.get("messages", []))})
+        except Exception:
+            pass
+    out.sort(key=lambda x: x["updated"], reverse=True)
+    return out
+
+
+def _snippet(text, needle, width=90):
+    """A short excerpt of `text` centered on the first match of `needle`."""
+    low = text.lower()
+    i = low.find(needle)
+    if i < 0:
+        return text[:width].strip()
+    start = max(0, i - width // 3)
+    end = min(len(text), i + len(needle) + width)
+    s = text[start:end].strip().replace("\n", " ")
+    if start > 0:
+        s = "..." + s
+    if end < len(text):
+        s = s + "..."
+    return s
+
+
+def search_convs(q):
+    """Keyword search over titles and message bodies. Hidden conversations are
+    skipped entirely, so search never exposes hidden content."""
+    needle = (q or "").strip().lower()
+    out = []
+    if not needle:
+        return out
+    for p in CONV_DIR.glob("*.json"):
+        try:
+            c = json.loads(p.read_text("utf-8"))
+            if c.get("hidden"):
+                continue
+            title = c.get("title", "Untitled")
+            msgs = c.get("messages", [])
+            hit_title = needle in title.lower()
+            snippet = ""
+            if hit_title:
+                snippet = title
+            else:
+                for m in msgs:
+                    t = m.get("text", "")
+                    if needle in t.lower():
+                        snippet = _snippet(t, needle)
+                        break
+                else:
+                    continue   # no match in this conversation
+            out.append({"id": c["id"], "title": title,
+                        "updated": c.get("updated", 0),
+                        "count": len(msgs), "snippet": snippet})
         except Exception:
             pass
     out.sort(key=lambda x: x["updated"], reverse=True)
@@ -421,6 +498,12 @@ class Handler(BaseHTTPRequestHandler):
             self._auth()
             return self._send_json(200, list_convs())
 
+        if method == "GET" and parts == ["conversations", "search"]:
+            self._auth()
+            from urllib.parse import parse_qs
+            q = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            return self._send_json(200, search_convs(q))
+
         if method == "POST" and parts == ["conversations"]:
             self._auth()
             return self._send_json(200, create_conv(self._read_body().get("title")))
@@ -477,22 +560,54 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat_stream(self, cid, body):
         model = body.get("model", "")
-        content = body.get("content", "")
+        content = (body.get("content") or "").strip()
         num_ctx = body.get("num_ctx") or 8192
+        image = body.get("image")                      # base64 (downscaled) or None
+        vision_model = (body.get("vision_model") or "").strip()
         if not model:
             raise ApiError(400, "model required")
 
         # These can raise 404/400 before we commit to a streaming response.
         c = load_conv(cid)
+
+        # If a photo is attached, read it with the vision model first, so a failure
+        # comes back as a clean error instead of a half-streamed reply.
+        vision_note = None
+        if image:
+            if not vision_model:
+                raise ApiError(400, "no image reader selected")
+            if not content:
+                content = "What's in this image?"
+            try:
+                vision_note = ollama_describe(vision_model, image, _vision_instruction(content))
+            except Exception as e:
+                raise ApiError(502, f"error reading image: {e}")
+            if not vision_note:
+                raise ApiError(502, "error reading image")
+
         with _store_lock:
-            c["messages"].append({"id": uuid.uuid4().hex, "role": "user",
-                                  "text": content, "ts": time.time()})
+            um = {"id": uuid.uuid4().hex, "role": "user", "text": content, "ts": time.time()}
+            if image:
+                um["image"] = image
+            if vision_note:
+                um["vision_note"] = vision_note
+            c["messages"].append(um)
             if c.get("title") in (None, "", "New conversation"):
-                first = content.strip().splitlines()[0] if content.strip() else "New conversation"
+                first = content.splitlines()[0] if content else "New conversation"
                 c["title"] = first[:40]
             save_conv(c)
-            oll_msgs = [{"role": m["role"], "content": m["text"]}
-                        for m in c["messages"] if m["role"] in ("user", "assistant")]
+            # Fold each image turn's readout into its content so the main model
+            # "sees" the image as plain text.
+            oll_msgs = []
+            for m in c["messages"]:
+                if m["role"] not in ("user", "assistant"):
+                    continue
+                txt = m["text"]
+                if m.get("vision_note"):
+                    txt = ("[An image was attached. A vision model read it as:]\n"
+                           + m["vision_note"] + "\n\n[The user's message about the image:]\n"
+                           + m["text"])
+                oll_msgs.append({"role": m["role"], "content": txt})
 
         # From here on we stream; do not raise past this point.
         self.send_response(200)
