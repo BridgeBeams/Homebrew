@@ -3,10 +3,13 @@ package com.waide.mobile.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.waide.mobile.ServerEntry
 import com.waide.mobile.WaideSettings
@@ -20,11 +23,14 @@ fun SettingsScreen(
     onRemoveServer: (String) -> Unit = {},
     serverCtx: Int = 8192,
     onServerCtxChange: (Int) -> Unit = {},
+    onUnhideAll: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
     var newName by remember { mutableStateOf("") }
     var newUrl by remember { mutableStateOf("") }
+    var unhideDialog by remember { mutableStateOf(false) }
+    var unhideMsg by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier
@@ -94,6 +100,27 @@ fun SettingsScreen(
             display = "$serverCtx tokens",
             help = "The server model's window for this session: your prompt plus the running conversation. It starts at 8,192 each time you open the app fresh. If a message needs more, the app asks before leaning harder on your PC, so you don't have to set this. Raise it here only if you'd rather do it yourself. Bigger uses more of the PC's memory."
         ) { onServerCtxChange(it.toInt()) }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
+        Text("CONVERSATIONS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Reveal every hidden conversation at once, so you enter your PIN a single " +
+                "time instead of unhiding them one by one.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { unhideMsg = null; unhideDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Unhide all conversations") }
+        unhideMsg?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = if (it.startsWith("Revealed")) W.Muted else W.Danger,
+                style = MaterialTheme.typography.labelMedium)
+        }
 
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
@@ -172,13 +199,49 @@ fun SettingsScreen(
         ) { Text("Save system prompt") }
 
         Spacer(Modifier.height(40.dp))
-        Text(
-            "Everything runs on this phone. No account, no network, no server.",
-            color = W.Muted,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(40.dp))
+
+        if (unhideDialog) {
+            UnhideAllDialog(
+                onSubmit = { pin ->
+                    onUnhideAll(pin) { err ->
+                        unhideMsg = err ?: "Revealed all hidden conversations."
+                        unhideDialog = false
+                    }
+                },
+                onCancel = { unhideDialog = false }
+            )
+        }
     }
+}
+
+@Composable
+private fun UnhideAllDialog(onSubmit: (String) -> Unit, onCancel: () -> Unit) {
+    var pin by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        confirmButton = {
+            TextButton(onClick = { if (pin.length >= 4) onSubmit(pin) }, enabled = pin.isNotEmpty()) {
+                Text("Unhide all", color = W.Amber)
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Enter PIN", color = W.Text) },
+        text = {
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                    focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                    focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                )
+            )
+        },
+        containerColor = W.Surface
+    )
 }
 
 @Composable
