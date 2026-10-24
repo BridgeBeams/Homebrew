@@ -41,9 +41,10 @@ data class ConvState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<ConvHit> = emptyList(),
-    // image / vision (shares the image reader chosen on the Server tab)
+    // image / vision (the image reader is shared with the Server tab)
     val pendingImageB64: String? = null,
-    val visionModel: String = ""
+    val visionModel: String = "",
+    val visionPickerOpen: Boolean = false
 )
 
 /**
@@ -226,7 +227,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         if (model.isBlank()) { _state.value = _state.value.copy(error = "Pick a model first.") ; return }
         if (img != null && _state.value.visionModel.isBlank()) {
             _state.value = _state.value.copy(
-                error = "Pick an image reader on the Server tab first (the + button there).")
+                error = "Pick an image reader first (tap +).", visionPickerOpen = true)
             return
         }
         val vision = _state.value.visionModel
@@ -269,6 +270,15 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearImage() { _state.value = _state.value.copy(pendingImageB64 = null) }
+
+    fun openVisionPicker() { _state.value = _state.value.copy(visionPickerOpen = true) }
+    fun closeVisionPicker() { _state.value = _state.value.copy(visionPickerOpen = false) }
+
+    /** Choose which installed model reads images. Shared with the Server tab. */
+    fun setVisionModel(name: String) {
+        store.setVisionModel(name)
+        _state.value = _state.value.copy(visionModel = name, visionPickerOpen = false)
+    }
 
     private fun uriToBase64(uri: Uri): String {
         val ctx = getApplication<Application>()
