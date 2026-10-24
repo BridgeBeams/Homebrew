@@ -64,7 +64,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         val servers = store.loadServers()
         val active = store.getActiveServerId().ifBlank { servers.firstOrNull()?.id ?: "" }
         _state.value = _state.value.copy(
-            servers = servers, activeServerId = active, visionModel = store.getVisionModel()
+            servers = servers, activeServerId = active,
+            selectedModel = store.getServerModel(), visionModel = store.getVisionModel()
         )
         // Auto-load the server's models on first open so the user doesn't have to tap refresh.
         if (serverUrl().isNotBlank()) refreshModels()
@@ -120,11 +121,14 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             val result = runCatching { ServerClient.listModels(serverUrl()) }
             withContext(Dispatchers.Main) {
                 result.onSuccess { list ->
+                    val saved = store.getServerModel()
                     val pick = when {
+                        saved.isNotBlank() && list.contains(saved) -> saved
                         _state.value.selectedModel.isNotBlank() && list.contains(_state.value.selectedModel) -> _state.value.selectedModel
                         list.isNotEmpty() -> list.first()
                         else -> ""
                     }
+                    if (pick.isNotBlank()) store.setServerModel(pick)
                     _state.value = _state.value.copy(
                         models = list, selectedModel = pick,
                         loadingModels = false, connected = true, error = null
@@ -140,6 +144,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectModel(name: String) {
+        store.setServerModel(name)
         _state.value = _state.value.copy(selectedModel = name)
     }
 
@@ -314,7 +319,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         // Image attached: hand it to the vision model first, then let the main model answer.
         if (img != null) {
             if (_state.value.visionModel.isBlank()) {
-                _state.value = _state.value.copy(visionPickerOpen = true)
+                _state.value = _state.value.copy(
+                    error = "No image reader set. Choose one in Settings > Server models.")
                 return
             }
             if (prompt.isEmpty()) prompt = "What's in this image?"

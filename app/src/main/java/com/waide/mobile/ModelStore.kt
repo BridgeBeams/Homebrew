@@ -107,7 +107,16 @@ class ModelStore(context: Context) {
     fun getVisionModel(): String = prefs.getString("visionModel", "") ?: ""
     fun setVisionModel(name: String) { prefs.edit().putString("visionModel", name).apply() }
 
-    // Last model used on the private Conversations side (remembered across restarts).
+    // The one answering model for the whole server side (amnesia Server tab AND the
+    // private Conversations tab share it). Set from Settings. Falls back to the old
+    // per-tab key so an existing install keeps its previous choice.
+    fun getServerModel(): String {
+        val m = prefs.getString("serverModel", "") ?: ""
+        return if (m.isNotBlank()) m else (prefs.getString("convModel", "") ?: "")
+    }
+    fun setServerModel(name: String) { prefs.edit().putString("serverModel", name).apply() }
+
+    // Last model used on the private Conversations side (kept for migration only).
     fun getConvModel(): String = prefs.getString("convModel", "") ?: ""
     fun setConvModel(name: String) { prefs.edit().putString("convModel", name).apply() }
 

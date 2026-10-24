@@ -41,10 +41,9 @@ data class ConvState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<ConvHit> = emptyList(),
-    // image / vision (the image reader is shared with the Server tab)
+    // image / vision (the image reader is chosen in Settings, shared with the Server tab)
     val pendingImageB64: String? = null,
-    val visionModel: String = "",
-    val visionPickerOpen: Boolean = false
+    val visionModel: String = ""
 )
 
 /**
@@ -88,7 +87,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                 r.onSuccess { info ->
                     token = info.token
                     _state.value = _state.value.copy(locked = false, authBusy = false, authError = null,
-                        loginInfo = info, visionModel = store.getVisionModel())
+                        loginInfo = info, visionModel = store.getVisionModel(),
+                        selectedModel = store.getServerModel())
                     refreshList()
                     refreshModels()
                 }.onFailure {
@@ -157,7 +157,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             val r = runCatching { ConversationsClient.models(b, token) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { list ->
-                    val saved = store.getConvModel()
+                    // The answering model is chosen in Settings and shared with the Server tab.
+                    val saved = store.getServerModel()
                     val pick = when {
                         saved.isNotBlank() && list.contains(saved) -> saved
                         _state.value.selectedModel.isNotBlank() && list.contains(_state.value.selectedModel) -> _state.value.selectedModel
@@ -168,11 +169,6 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-    }
-
-    fun selectModel(m: String) {
-        store.setConvModel(m)
-        _state.value = _state.value.copy(selectedModel = m)
     }
 
     fun openConversation(id: String) {
@@ -227,7 +223,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         if (model.isBlank()) { _state.value = _state.value.copy(error = "Pick a model first.") ; return }
         if (img != null && _state.value.visionModel.isBlank()) {
             _state.value = _state.value.copy(
-                error = "Pick an image reader first (tap +).", visionPickerOpen = true)
+                error = "No image reader set. Choose one in Settings > Server models.")
             return
         }
         val vision = _state.value.visionModel
@@ -270,15 +266,6 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearImage() { _state.value = _state.value.copy(pendingImageB64 = null) }
-
-    fun openVisionPicker() { _state.value = _state.value.copy(visionPickerOpen = true) }
-    fun closeVisionPicker() { _state.value = _state.value.copy(visionPickerOpen = false) }
-
-    /** Choose which installed model reads images. Shared with the Server tab. */
-    fun setVisionModel(name: String) {
-        store.setVisionModel(name)
-        _state.value = _state.value.copy(visionModel = name, visionPickerOpen = false)
-    }
 
     private fun uriToBase64(uri: Uri): String {
         val ctx = getApplication<Application>()

@@ -190,24 +190,14 @@ private fun Shell(
                     state = serverState,
                     hasServerUrl = serverState.servers.any { it.id == serverState.activeServerId },
                     onRefreshModels = { svm.refreshModels() },
-                    onSelectModel = { svm.selectModel(it) },
                     onSend = { svm.send(it) },
                     onStop = { svm.stopGeneration() },
                     onClear = { svm.clearChat() },
-                    onDeleteServerModel = { svm.deleteServerModel(it) },
-                    onPullServerModel = { svm.pullServerModel(it) },
-                    onSearchHf = { svm.searchHf(it) },
-                    onOpenQuants = { svm.openQuants(it) },
-                    onCloseQuants = { svm.closeQuants() },
-                    onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
                     onSelectServer = { svm.selectServer(it) },
                     onConfirmBump = { svm.confirmBump() },
                     onDeclineBump = { svm.declineBump() },
                     onImagePicked = { svm.attachImage(it) },
-                    onClearImage = { svm.clearImage() },
-                    onOpenVisionPicker = { svm.openVisionPicker() },
-                    onCloseVisionPicker = { svm.closeVisionPicker() },
-                    onSetVisionModel = { svm.setVisionModel(it) }
+                    onClearImage = { svm.clearImage() }
                 )
                 Tab.Convos -> ConversationsScreen(
                     state = convState,
@@ -221,7 +211,6 @@ private fun Shell(
                     onRename = { id, t -> cvm.renameConversation(id, t) },
                     onDeleteConv = { cvm.deleteConversation(it) },
                     onDeleteMsg = { cvm.deleteMessage(it) },
-                    onSelectModel = { cvm.selectModel(it) },
                     onHide = { cvm.hideConversation(it) },
                     onRequestUnhide = { cvm.requestUnhide(it) },
                     onSubmitUnhide = { cvm.submitUnhide(it) },
@@ -229,10 +218,7 @@ private fun Shell(
                     onImagePicked = { cvm.attachImage(it) },
                     onClearImage = { cvm.clearImage() },
                     onSearch = { cvm.setQuery(it) },
-                    onClearSearch = { cvm.clearSearch() },
-                    onOpenVisionPicker = { cvm.openVisionPicker() },
-                    onCloseVisionPicker = { cvm.closeVisionPicker() },
-                    onSetVisionModel = { cvm.setVisionModel(it) }
+                    onClearSearch = { cvm.clearSearch() }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
@@ -242,7 +228,17 @@ private fun Shell(
                     onRemoveServer = { svm.removeServer(it) },
                     serverCtx = serverState.ctx,
                     onServerCtxChange = { svm.setCtx(it) },
-                    onUnhideAll = { pin, cb -> cvm.unhideAll(pin, cb) }
+                    onUnhideAll = { pin, cb -> cvm.unhideAll(pin, cb) },
+                    serverState = serverState,
+                    onRefreshModels = { svm.refreshModels() },
+                    onSelectModel = { svm.selectModel(it) },
+                    onSetVisionModel = { svm.setVisionModel(it) },
+                    onDeleteServerModel = { svm.deleteServerModel(it) },
+                    onPullServerModel = { svm.pullServerModel(it) },
+                    onSearchHf = { svm.searchHf(it) },
+                    onOpenQuants = { svm.openQuants(it) },
+                    onCloseQuants = { svm.closeQuants() },
+                    onPullHf = { repo, tag -> svm.pullHf(repo, tag) }
                 )
             }
         }
