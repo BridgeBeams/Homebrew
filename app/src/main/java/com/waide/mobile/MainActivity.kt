@@ -225,7 +225,11 @@ private fun Shell(
                     onHide = { cvm.hideConversation(it) },
                     onRequestUnhide = { cvm.requestUnhide(it) },
                     onSubmitUnhide = { cvm.submitUnhide(it) },
-                    onCancelUnhide = { cvm.cancelUnhide() }
+                    onCancelUnhide = { cvm.cancelUnhide() },
+                    onImagePicked = { cvm.attachImage(it) },
+                    onClearImage = { cvm.clearImage() },
+                    onSearch = { cvm.setQuery(it) },
+                    onClearSearch = { cvm.clearSearch() }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,

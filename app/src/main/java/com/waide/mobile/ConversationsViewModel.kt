@@ -1,6 +1,10 @@
 package com.waide.mobile
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 data class ConvState(
     val locked: Boolean = true,
@@ -31,7 +36,14 @@ data class ConvState(
     val error: String? = null,
     // hide / unhide
     val unhideTarget: String? = null,   // a conversation awaiting the PIN to reveal
-    val unhideError: String? = null
+    val unhideError: String? = null,
+    // keyword search
+    val query: String = "",
+    val searching: Boolean = false,
+    val results: List<ConvHit> = emptyList(),
+    // image / vision (shares the image reader chosen on the Server tab)
+    val pendingImageB64: String? = null,
+    val visionModel: String = ""
 )
 
 /**
@@ -74,7 +86,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 r.onSuccess { info ->
                     token = info.token
-                    _state.value = _state.value.copy(locked = false, authBusy = false, authError = null, loginInfo = info)
+                    _state.value = _state.value.copy(locked = false, authBusy = false, authError = null,
+                        loginInfo = info, visionModel = store.getVisionModel())
                     refreshList()
                     refreshModels()
                 }.onFailure {
@@ -103,6 +116,37 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                  .onFailure { _state.value = _state.value.copy(loadingList = false, error = it.message) }
             }
         }
+    }
+
+    private var searchJob: Job? = null
+
+    /** Called as the user types. Debounced; blank query clears results. */
+    fun setQuery(q: String) {
+        _state.value = _state.value.copy(query = q)
+        searchJob?.cancel()
+        if (q.isBlank()) {
+            _state.value = _state.value.copy(results = emptyList(), searching = false)
+            return
+        }
+        if (token.isBlank()) return
+        val b = base()
+        _state.value = _state.value.copy(searching = true)
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(250)   // wait for typing to settle
+            val r = runCatching { ConversationsClient.search(b, token, q.trim()) }
+            withContext(Dispatchers.Main) {
+                // ignore if the query changed while we were fetching
+                if (_state.value.query == q) {
+                    r.onSuccess { _state.value = _state.value.copy(results = it, searching = false) }
+                     .onFailure { _state.value = _state.value.copy(searching = false, error = it.message) }
+                }
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _state.value = _state.value.copy(query = "", results = emptyList(), searching = false)
     }
 
     fun refreshModels() {
@@ -175,17 +219,27 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val id = _state.value.openId ?: return
         val model = _state.value.selectedModel
+        val img = _state.value.pendingImageB64
         val prompt = text.trim()
-        if (prompt.isEmpty() || _state.value.busy) return
+        if (_state.value.busy) return
+        if (prompt.isEmpty() && img == null) return
         if (model.isBlank()) { _state.value = _state.value.copy(error = "Pick a model first.") ; return }
+        if (img != null && _state.value.visionModel.isBlank()) {
+            _state.value = _state.value.copy(
+                error = "Pick an image reader on the Server tab first (the + button there).")
+            return
+        }
+        val vision = _state.value.visionModel
         val b = base()
-        val localUser = ConvMsg("local-${System.currentTimeMillis()}", "user", prompt)
-        _state.value = _state.value.copy(messages = _state.value.messages + localUser, streaming = "", busy = true, error = null)
+        val localUser = ConvMsg("local-${System.currentTimeMillis()}", "user",
+            prompt.ifBlank { "What's in this image?" }, imageB64 = img, hasVision = img != null)
+        _state.value = _state.value.copy(messages = _state.value.messages + localUser,
+            pendingImageB64 = null, streaming = "", busy = true, error = null)
         GenerationService.begin(getApplication())
         genJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 var acc = ""
-                ConversationsClient.chatStream(b, token, id, model, prompt, 8192) { piece ->
+                ConversationsClient.chatStream(b, token, id, model, prompt, 8192, img, vision) { piece ->
                     acc += piece
                     _state.value = _state.value.copy(streaming = acc)
                 }
@@ -201,6 +255,33 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                 GenerationService.end(getApplication())
             }
         }
+    }
+
+    fun attachImage(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val b64 = runCatching { uriToBase64(uri) }.getOrNull()
+            withContext(Dispatchers.Main) {
+                _state.value = if (b64 == null)
+                    _state.value.copy(error = "Couldn't read that image.")
+                else _state.value.copy(pendingImageB64 = b64, error = null)
+            }
+        }
+    }
+
+    fun clearImage() { _state.value = _state.value.copy(pendingImageB64 = null) }
+
+    private fun uriToBase64(uri: Uri): String {
+        val ctx = getApplication<Application>()
+        val bmp = ctx.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
+            ?: throw IllegalStateException("decode failed")
+        val m = maxOf(bmp.width, bmp.height)
+        val scaled = if (m <= 1024) bmp else {
+            val s = 1024f / m
+            Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+        }
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+        return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
     }
 
     fun renameConversation(id: String, title: String) {

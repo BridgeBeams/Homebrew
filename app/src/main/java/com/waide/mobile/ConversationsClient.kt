@@ -14,7 +14,14 @@ import java.net.URL
  * HttpURLConnection, no third-party libraries, same as ServerClient.
  */
 data class ConvSummary(val id: String, val title: String, val updated: Double, val count: Int, val hidden: Boolean = false)
-data class ConvMsg(val id: String, val role: String, val text: String)
+data class ConvHit(val id: String, val title: String, val updated: Double, val count: Int, val snippet: String)
+data class ConvMsg(
+    val id: String,
+    val role: String,
+    val text: String,
+    val imageB64: String? = null,   // thumbnail of an attached photo, if any
+    val hasVision: Boolean = false  // this turn had an image the vision model read
+)
 data class LoginInfo(
     val token: String,
     val lastLogin: Double?,
@@ -94,6 +101,19 @@ object ConversationsClient {
         }
     }
 
+    /** Keyword search over titles and message bodies (hidden conversations excluded server-side). */
+    fun search(base: String, token: String, q: String): List<ConvHit> {
+        val enc = java.net.URLEncoder.encode(q, "UTF-8")
+        val c = open("$base/conversations/search?q=$enc", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            ConvHit(o.getString("id"), o.optString("title", "Untitled"),
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optString("snippet", ""))
+        }
+    }
+
     fun hide(base: String, token: String, id: String) {
         val c = open("$base/conversations/$id/hide", "POST", token)
         c.doOutput = true
@@ -139,7 +159,10 @@ object ConversationsClient {
         o.optJSONArray("messages")?.let {
             for (i in 0 until it.length()) {
                 val m = it.getJSONObject(i)
-                msgs.add(ConvMsg(m.optString("id"), m.optString("role"), m.optString("text")))
+                val img = m.optString("image")
+                val vn = m.optString("vision_note")
+                msgs.add(ConvMsg(m.optString("id"), m.optString("role"), m.optString("text"),
+                    if (img.isBlank()) null else img, vn.isNotBlank()))
             }
         }
         return Pair(o.optString("title", "Untitled"), msgs)
@@ -167,15 +190,17 @@ object ConversationsClient {
     fun chatStream(
         base: String, token: String, id: String,
         model: String, content: String, numCtx: Int,
+        imageB64: String?, visionModel: String?,
         onToken: (String) -> Unit
     ): String {
         val c = open("$base/conversations/$id/chat", "POST", token)
         c.doOutput = true
         c.readTimeout = 0 // streaming
         c.setRequestProperty("Content-Type", "application/json")
-        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().put("model", model).put("content", content).put("num_ctx", numCtx).toString())
-        }
+        val body = JSONObject().put("model", model).put("content", content).put("num_ctx", numCtx)
+        if (imageB64 != null) body.put("image", imageB64)
+        if (!visionModel.isNullOrBlank()) body.put("vision_model", visionModel)
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(body.toString()) }
         if (c.responseCode != 200) fail(c)
         val sb = StringBuilder()
         BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
