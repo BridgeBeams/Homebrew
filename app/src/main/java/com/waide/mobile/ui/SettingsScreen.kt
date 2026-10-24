@@ -12,6 +12,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.waide.mobile.ServerEntry
+import com.waide.mobile.ServerState
 import com.waide.mobile.WaideSettings
 
 @Composable
@@ -24,6 +25,17 @@ fun SettingsScreen(
     serverCtx: Int = 8192,
     onServerCtxChange: (Int) -> Unit = {},
     onUnhideAll: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    // server models (shared by the amnesia Server tab and the Convos tab)
+    serverState: ServerState = ServerState(),
+    onRefreshModels: () -> Unit = {},
+    onSelectModel: (String) -> Unit = {},
+    onSetVisionModel: (String) -> Unit = {},
+    onDeleteServerModel: (String) -> Unit = {},
+    onPullServerModel: (String) -> Unit = {},
+    onSearchHf: (String) -> Unit = {},
+    onOpenQuants: (String) -> Unit = {},
+    onCloseQuants: () -> Unit = {},
+    onPullHf: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
@@ -31,6 +43,27 @@ fun SettingsScreen(
     var newUrl by remember { mutableStateOf("") }
     var unhideDialog by remember { mutableStateOf(false) }
     var unhideMsg by remember { mutableStateOf<String?>(null) }
+    var managingModels by remember { mutableStateOf(false) }
+
+    // The full-screen server-models manager (search, pull, delete, pick answering model
+    // and image reader). Swaps in over Settings, same pattern the Server tab used before.
+    if (managingModels) {
+        ServerModelsScreen(
+            state = serverState,
+            onBack = { managingModels = false },
+            onRefresh = onRefreshModels,
+            onSelectModel = onSelectModel,
+            onSetVisionModel = onSetVisionModel,
+            onDelete = onDeleteServerModel,
+            onPull = onPullServerModel,
+            onSearchHf = onSearchHf,
+            onOpenQuants = onOpenQuants,
+            onCloseQuants = onCloseQuants,
+            onPullHf = onPullHf,
+            modifier = modifier
+        )
+        return
+    }
 
     Column(
         modifier
@@ -85,6 +118,29 @@ fun SettingsScreen(
             enabled = newUrl.isNotBlank(),
             colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
         ) { Text("Add machine") }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
+        Text("SERVER MODELS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "One place for the whole server side. The amnesia Server tab and the Convos " +
+                "tab both use the answering model and image reader you pick here. Search for, " +
+                "download, and delete models too.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("Answering model: ${serverState.selectedModel.ifBlank { "none set" }}",
+            color = W.Text, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(2.dp))
+        Text("Image reader: ${serverState.visionModel.ifBlank { "none set" }}",
+            color = W.Muted, style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { managingModels = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Manage server models") }
 
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)

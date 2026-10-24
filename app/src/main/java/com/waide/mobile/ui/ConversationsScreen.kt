@@ -14,6 +14,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -70,7 +72,6 @@ fun ConversationsScreen(
     onRename: (String, String) -> Unit,
     onDeleteConv: (String) -> Unit,
     onDeleteMsg: (String) -> Unit,
-    onSelectModel: (String) -> Unit,
     onHide: (String) -> Unit,
     onRequestUnhide: (String) -> Unit,
     onSubmitUnhide: (String) -> Unit,
@@ -85,7 +86,7 @@ fun ConversationsScreen(
         state.locked -> PinGate(state, onUnlock, modifier)
         state.openId == null -> ConvList(state, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
             onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch, modifier)
-        else -> ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onSelectModel, onRename,
+        else -> ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onRename,
             onDeleteConv, onImagePicked, onClearImage, modifier)
     }
 }
@@ -376,7 +377,6 @@ private fun ConvChat(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onDeleteMsg: (String) -> Unit,
-    onSelectModel: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDeleteConv: (String) -> Unit,
     onImagePicked: (Uri) -> Unit,
@@ -384,7 +384,6 @@ private fun ConvChat(
     modifier: Modifier
 ) {
     var draft by remember { mutableStateOf("") }
-    var modelMenu by remember { mutableStateOf(false) }
     var topMenu by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
@@ -445,29 +444,18 @@ private fun ConvChat(
 
         HorizontalDivider(color = W.Line)
         Column(Modifier.background(W.Surface).imePadding()) {
-            // model picker row
-            Box {
-                Row(
-                    Modifier.fillMaxWidth().clickable { modelMenu = true }.padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Model", color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                    Spacer(Modifier.width(10.dp))
-                    Text(state.selectedModel.ifBlank { "No model" }, color = W.Text,
-                        style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Icon(Icons.Filled.ArrowDropDown, contentDescription = "Pick model", tint = W.Muted)
-                }
-                DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                    if (state.models.isEmpty())
-                        DropdownMenuItem(text = { Text("No models") }, onClick = { modelMenu = false })
-                    state.models.forEach { m ->
-                        DropdownMenuItem(
-                            text = { Text(m, color = if (m == state.selectedModel) W.Amber else W.Text) },
-                            onClick = { onSelectModel(m); modelMenu = false })
-                    }
-                }
+            // Model is read-only here; it's chosen in Settings > Server models.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Model", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.width(10.dp))
+                Text(state.selectedModel.ifBlank { "No model (set one in Settings)" }, color = W.Text,
+                    style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
+
             // pending image preview (a photo chosen but not yet sent)
             state.pendingImageB64?.let { b64 ->
                 val bmp = remember(b64) { decodeB64(b64) }
@@ -492,7 +480,10 @@ private fun ConvChat(
             }
             Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
                 FilledIconButton(
-                    onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onClick = {
+                        photoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = W.SurfaceHi, contentColor = W.Amber
                     ),

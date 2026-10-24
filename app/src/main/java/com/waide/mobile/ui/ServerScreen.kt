@@ -51,45 +51,17 @@ fun ServerScreen(
     state: ServerState,
     hasServerUrl: Boolean,
     onRefreshModels: () -> Unit,
-    onSelectModel: (String) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
-    onDeleteServerModel: (String) -> Unit = {},
-    onPullServerModel: (String) -> Unit = {},
-    onSearchHf: (String) -> Unit = {},
-    onOpenQuants: (String) -> Unit = {},
-    onCloseQuants: () -> Unit = {},
-    onPullHf: (String, String) -> Unit = { _, _ -> },
     onSelectServer: (String) -> Unit = {},
     onConfirmBump: () -> Unit = {},
     onDeclineBump: () -> Unit = {},
     onImagePicked: (Uri) -> Unit = {},
     onClearImage: () -> Unit = {},
-    onOpenVisionPicker: () -> Unit = {},
-    onCloseVisionPicker: () -> Unit = {},
-    onSetVisionModel: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var managing by remember { mutableStateOf(false) }
-    if (managing) {
-        ServerModelsManager(
-            state = state,
-            onBack = { managing = false },
-            onRefresh = onRefreshModels,
-            onDelete = onDeleteServerModel,
-            onPull = onPullServerModel,
-            onSearchHf = onSearchHf,
-            onOpenQuants = onOpenQuants,
-            onCloseQuants = onCloseQuants,
-            onPullHf = onPullHf,
-            modifier = modifier
-        )
-        return
-    }
-
     var draft by remember { mutableStateOf("") }
-    var menuOpen by remember { mutableStateOf(false) }
     var machineMenu by remember { mutableStateOf(false) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }   // image tapped for full screen
     val listState = rememberLazyListState()
@@ -138,41 +110,18 @@ fun ServerScreen(
                 }
             }
 
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    Row(
-                        Modifier.fillMaxWidth().clickable { menuOpen = true }.padding(vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Model", color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                        Spacer(Modifier.width(10.dp))
-                        Text(state.selectedModel.ifBlank { "No model" }, color = W.Text,
-                            style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Pick model", tint = W.Muted)
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        if (state.models.isEmpty()) {
-                            DropdownMenuItem(text = { Text("No models. Tap refresh.") }, onClick = { menuOpen = false })
-                        }
-                        state.models.forEach { m ->
-                            DropdownMenuItem(
-                                text = { Text(m, color = if (m == state.selectedModel) W.Amber else W.Text) },
-                                onClick = { onSelectModel(m); menuOpen = false }
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.width(6.dp))
+            // Model is read-only here; it's chosen in Settings > Server models.
+            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Model", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.width(10.dp))
+                Text(state.selectedModel.ifBlank { "No model (set one in Settings)" }, color = W.Text,
+                    style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 IconButton(onClick = onRefreshModels, modifier = Modifier.size(34.dp)) {
                     if (state.loadingModels)
                         CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
                     else
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh models", tint = W.Amber)
-                }
-                TextButton(onClick = { managing = true },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                    Text("Manage", color = W.Muted)
+                        Icon(Icons.Filled.Refresh, contentDescription = "Reconnect", tint = W.Amber)
                 }
             }
 
@@ -236,21 +185,6 @@ fun ServerScreen(
         HorizontalDivider(color = W.Line)
         Column(Modifier.background(W.Surface).imePadding()) {
 
-            // Which model reads images; tap to change it.
-            if (state.visionModel.isNotBlank()) {
-                Row(
-                    Modifier.fillMaxWidth().clickable { onOpenVisionPicker() }
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.Image, contentDescription = null, tint = W.Muted,
-                        modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Image reader: ${state.visionModel}  ·  change",
-                        color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                }
-            }
-
             // Preview of the attached photo, with a way to drop it.
             state.pendingImageB64?.let { b64 ->
                 val bmp = remember(b64) { decodeB64(b64) }
@@ -276,11 +210,11 @@ fun ServerScreen(
                 Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // Attach a photo. First time (no reader chosen) this opens the reader picker.
+                // Attach a photo. The image reader is set in Settings; if none is set,
+                // sending shows a short note pointing there.
                 FilledIconButton(
                     onClick = {
-                        if (state.visionModel.isBlank()) onOpenVisionPicker()
-                        else photoPicker.launch(
+                        photoPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
@@ -350,16 +284,6 @@ fun ServerScreen(
         )
     }
 
-    if (state.visionPickerOpen) {
-        VisionReaderPicker(
-            state = state,
-            onClose = onCloseVisionPicker,
-            onPull = onPullServerModel,
-            onUse = onSetVisionModel,
-            onDelete = onDeleteServerModel
-        )
-    }
-
     // Tap an attached image to inspect it full screen (pinch to zoom, drag to pan).
     zoomB64?.let { b64 ->
         val bmp = remember(b64) { decodeB64(b64) }
@@ -395,329 +319,10 @@ fun ServerScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun VisionReaderPicker(
-    state: ServerState,
-    onClose: () -> Unit,
-    onPull: (String) -> Unit,
-    onUse: (String) -> Unit,
-    onDelete: (String) -> Unit
-) {
-    val suggestions = listOf("qwen2.5vl:7b", "llava:7b", "moondream", "llama3.2-vision:11b")
-    var pullName by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onClose,
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onClose) { Text("Close", color = W.Muted) } },
-        title = { Text("Image reader", color = W.Text) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    "Pick the model that reads your images. It runs only when you attach a " +
-                        "photo, then your normal model answers using what it read.",
-                    color = W.Muted, style = MaterialTheme.typography.labelSmall
-                )
-                if (state.visionModel.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Current: ${state.visionModel}", color = W.Amber,
-                        style = MaterialTheme.typography.labelMedium)
-                }
-                if (state.managingBusy && state.pullStatus != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), color = W.Amber, strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text("Downloading: ${state.pullStatus}", color = W.Muted,
-                            style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-                Text("SUGGESTED", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-                suggestions.forEach { name ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(name, color = W.Text, modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium)
-                        TextButton(onClick = { onPull(name) }, enabled = !state.managingBusy) {
-                            Text("Get", color = W.Amber)
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
-                Text("INSTALLED (tap to use)", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-                if (state.models.isEmpty()) {
-                    Text("None yet. Get one above, then tap it here.", color = W.Muted,
-                        style = MaterialTheme.typography.bodyMedium)
-                } else {
-                    state.models.forEach { name ->
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                                .clickable(enabled = !state.managingBusy) { onUse(name) }
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(name, modifier = Modifier.weight(1f),
-                                color = if (name == state.visionModel) W.Amber else W.Text,
-                                style = MaterialTheme.typography.bodyMedium)
-                            TextButton(onClick = { onDelete(name) }, enabled = !state.managingBusy) {
-                                Text("Delete", color = W.Danger)
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
-                Text("OR PULL BY NAME", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = pullName, onValueChange = { pullName = it },
-                        modifier = Modifier.weight(1f), singleLine = true, enabled = !state.managingBusy,
-                        placeholder = { Text("e.g. qwen2.5vl:7b", color = W.Muted) },
-                        shape = RoundedCornerShape(6.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
-                            focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg
-                        )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onPull(pullName); pullName = "" },
-                        enabled = !state.managingBusy && pullName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
-                    ) { Text("Pull") }
-                }
-            }
-        },
-        containerColor = W.Surface
-    )
-}
-
 private fun decodeB64(b64: String): ImageBitmap? = runCatching {
     val bytes = Base64.decode(b64, Base64.NO_WRAP)
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
 }.getOrNull()
-
-@Composable
-private fun ServerModelsManager(
-    state: ServerState,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
-    onDelete: (String) -> Unit,
-    onPull: (String) -> Unit,
-    onSearchHf: (String) -> Unit,
-    onOpenQuants: (String) -> Unit,
-    onCloseQuants: () -> Unit,
-    onPullHf: (String, String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var query by remember { mutableStateOf("") }
-    var showPaste by remember { mutableStateOf(false) }
-    var addName by remember { mutableStateOf("") }
-    var confirm by remember { mutableStateOf<String?>(null) }
-
-    Column(modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextButton(onClick = onBack) { Text("< Back", color = W.Amber) }
-            Text("Server models", color = W.Text, style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f))
-            IconButton(onClick = onRefresh) {
-                if (state.loadingModels)
-                    CircularProgressIndicator(Modifier.size(20.dp), color = W.Amber, strokeWidth = 2.dp)
-                else
-                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = W.Amber)
-            }
-        }
-        HorizontalDivider(color = W.Line)
-
-        // Search Hugging Face
-        Column(Modifier.padding(14.dp)) {
-            Text("FIND A MODEL", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it },
-                    modifier = Modifier.weight(1f), singleLine = true, enabled = !state.searching,
-                    placeholder = { Text("search, e.g. mytho abliterated", color = W.Muted) },
-                    shape = RoundedCornerShape(6.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
-                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg
-                    )
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = { onSearchHf(query) },
-                    enabled = !state.searching && query.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
-                ) { Text("Search") }
-            }
-            Text("Searches Hugging Face, newest first.", color = W.Muted,
-                style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
-
-            if (state.managingBusy && state.pullStatus != null) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(16.dp), color = W.Amber, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Downloading: ${state.pullStatus}", color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                }
-            }
-
-            // optional: paste an exact name
-            TextButton(onClick = { showPaste = !showPaste }, contentPadding = PaddingValues(0.dp)) {
-                Text(if (showPaste) "hide exact-name box" else "or paste an exact name", color = W.Muted,
-                    style = MaterialTheme.typography.labelSmall)
-            }
-            if (showPaste) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = addName, onValueChange = { addName = it },
-                        modifier = Modifier.weight(1f), singleLine = true, enabled = !state.managingBusy,
-                        placeholder = { Text("qwen2.5:7b  or  hf.co/user/repo:Q4_K_M", color = W.Muted) },
-                        shape = RoundedCornerShape(6.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
-                            focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg
-                        )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onPull(addName); addName = "" },
-                        enabled = !state.managingBusy && addName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
-                    ) { Text("Add") }
-                }
-            }
-        }
-        HorizontalDivider(color = W.Line)
-
-        state.error?.let {
-            Text(it, color = W.Danger, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(14.dp))
-        }
-
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-            if (state.searching) {
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), color = W.Amber, strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp)); Text("Searching Hugging Face...", color = W.Muted)
-                    }
-                }
-            }
-
-            if (state.searchResults.isNotEmpty()) {
-                item { Text("SEARCH RESULTS", style = MaterialTheme.typography.labelSmall, color = W.Amber) }
-                items(state.searchResults) { r ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                            .background(W.Surface, RoundedCornerShape(4.dp))
-                            .clickable(enabled = !state.managingBusy) { onOpenQuants(r.id) }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(r.id, color = W.Text, style = MaterialTheme.typography.bodyMedium)
-                            Spacer(Modifier.height(2.dp))
-                            Text("updated ${r.updated}  ·  ${r.downloads} downloads",
-                                color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                        }
-                        Text("Get >", color = W.Amber, style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-                item { HorizontalDivider(color = W.Line, modifier = Modifier.padding(vertical = 6.dp)) }
-            }
-
-            item { Text("ON THE SERVER", style = MaterialTheme.typography.labelSmall, color = W.Amber) }
-            if (state.models.isEmpty()) {
-                item { Text("Nothing installed yet.", color = W.Muted, style = MaterialTheme.typography.bodyMedium) }
-            } else {
-                items(state.models) { name ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                            .background(W.Surface, RoundedCornerShape(4.dp))
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(name, color = W.Text, style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f))
-                        TextButton(onClick = { confirm = name }, enabled = !state.managingBusy) {
-                            Text("Delete", color = W.Danger)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Quant picker for a tapped search result
-    if (state.quantRepo != null) {
-        AlertDialog(
-            onDismissRequest = onCloseQuants,
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = onCloseQuants) { Text("Cancel", color = W.Muted) } },
-            title = { Text("Pick a version", color = W.Text) },
-            text = {
-                if (state.loadingQuants) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), color = W.Amber, strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp)); Text("Reading versions...", color = W.Muted)
-                    }
-                } else if (state.quants.isEmpty()) {
-                    Text("No .gguf versions found in that repo.", color = W.Muted)
-                } else {
-                    Column {
-                        Text("Smaller = faster and less memory. Q4_K_M is a good default.",
-                            color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                        Spacer(Modifier.height(8.dp))
-                        state.quants.forEach { qz ->
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .border(1.dp, W.Line, RoundedCornerShape(4.dp))
-                                    .clickable { onPullHf(state.quantRepo!!, qz.tag) }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(qz.tag, color = W.Amber, modifier = Modifier.weight(1f))
-                                Text("Download", color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                            }
-                            Spacer(Modifier.height(6.dp))
-                        }
-                    }
-                }
-            },
-            containerColor = W.Surface
-        )
-    }
-
-    confirm?.let { name ->
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            confirmButton = {
-                TextButton(onClick = { onDelete(name); confirm = null }) { Text("Delete", color = W.Danger) }
-            },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel", color = W.Muted) } },
-            title = { Text("Remove from server?", color = W.Text) },
-            text = { Text("This deletes $name from your PC. You can add it again later.", color = W.Muted) },
-            containerColor = W.Surface
-        )
-    }
-}
 
 @Composable
 private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
