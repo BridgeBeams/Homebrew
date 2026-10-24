@@ -229,7 +229,10 @@ private fun Shell(
                     onImagePicked = { cvm.attachImage(it) },
                     onClearImage = { cvm.clearImage() },
                     onSearch = { cvm.setQuery(it) },
-                    onClearSearch = { cvm.clearSearch() }
+                    onClearSearch = { cvm.clearSearch() },
+                    onOpenVisionPicker = { cvm.openVisionPicker() },
+                    onCloseVisionPicker = { cvm.closeVisionPicker() },
+                    onSetVisionModel = { cvm.setVisionModel(it) }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
