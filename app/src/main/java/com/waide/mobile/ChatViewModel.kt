@@ -1,6 +1,8 @@
 package com.waide.mobile
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +31,37 @@ data class ChatState(
     val error: String? = null
 )
 
+// How well a given model file is expected to run on THIS phone, from its size vs RAM.
+enum class Fit { SMOOTH, TIGHT, TOOBIG, UNKNOWN }
+
+// One downloadable .gguf option within a repo, with a phone-specific recommendation.
+data class HfFileOption(
+    val path: String,        // full repo path, used to build the download URL
+    val label: String,       // display name (the file's basename)
+    val sizeBytes: Long,
+    val fit: Fit
+) {
+    val sizeLabel: String
+        get() {
+            if (sizeBytes <= 0) return "size unknown"
+            val gb = sizeBytes / 1024.0 / 1024.0 / 1024.0
+            return if (gb >= 1.0) String.format("%.1f GB", gb)
+            else String.format("%.0f MB", sizeBytes / 1024.0 / 1024.0)
+        }
+}
+
+// The "find and download a model" browser on the Local Models screen.
+data class LocalModelBrowse(
+    val searching: Boolean = false,
+    val results: List<HfModel> = emptyList(),
+    val quantRepo: String? = null,
+    val loadingQuants: Boolean = false,
+    val quants: List<HfFileOption> = emptyList(),
+    val downloading: Boolean = false,
+    val downloadStatus: String? = null,
+    val error: String? = null
+)
+
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = ModelStore(app)
@@ -42,7 +75,121 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _models = MutableStateFlow<List<GgufFile>>(emptyList())
     val models: StateFlow<List<GgufFile>> = _models.asStateFlow()
 
+    private val _browse = MutableStateFlow(LocalModelBrowse())
+    val browse: StateFlow<LocalModelBrowse> = _browse.asStateFlow()
+
     private var genJob: Job? = null
+    private var searchJob: Job? = null
+    private var downloadJob: Job? = null
+    @Volatile private var cancelDownload = false
+
+    // Physical RAM on this device; used to judge which models will run smoothly.
+    private val totalRam: Long by lazy {
+        runCatching {
+            val am = getApplication<Application>().getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val mi = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            mi.totalMem
+        }.getOrDefault(0L)
+    }
+
+    // A loaded model needs roughly its file size in RAM plus room for the OS and context.
+    // These thresholds are deliberately conservative so a "smooth" pick really is smooth.
+    private fun fitFor(size: Long): Fit = when {
+        totalRam <= 0 || size <= 0 -> Fit.UNKNOWN
+        size <= totalRam * 45 / 100 -> Fit.SMOOTH
+        size <= totalRam * 70 / 100 -> Fit.TIGHT
+        else -> Fit.TOOBIG
+    }
+
+    // ---------------- find & download models from Hugging Face ----------------
+    fun searchLocalHf(query: String) {
+        val q = query.trim()
+        if (q.isBlank() || _browse.value.searching) return
+        searchJob?.cancel()
+        _browse.value = _browse.value.copy(searching = true, error = null, results = emptyList())
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ServerClient.searchHf(q) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _browse.value = _browse.value.copy(searching = false, results = it) }
+                 .onFailure { _browse.value = _browse.value.copy(searching = false, error = it.message ?: "Search failed.") }
+            }
+        }
+    }
+
+    fun openLocalQuants(repoId: String) {
+        _browse.value = _browse.value.copy(quantRepo = repoId, loadingQuants = true, quants = emptyList(), error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ServerClient.listHfFiles(repoId) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { raw ->
+                    val opts = raw.map {
+                        HfFileOption(it.path, it.path.substringAfterLast('/'), it.sizeBytes, fitFor(it.sizeBytes))
+                    }
+                    _browse.value = _browse.value.copy(loadingQuants = false, quants = opts)
+                }.onFailure {
+                    _browse.value = _browse.value.copy(loadingQuants = false, quantRepo = null,
+                        error = it.message ?: "Could not read that repo.")
+                }
+            }
+        }
+    }
+
+    fun closeLocalQuants() {
+        _browse.value = _browse.value.copy(quantRepo = null, quants = emptyList(), loadingQuants = false)
+    }
+
+    fun closeLocalSearch() {
+        searchJob?.cancel()
+        _browse.value = _browse.value.copy(searching = false, results = emptyList())
+    }
+
+    fun cancelLocalDownload() { cancelDownload = true }
+
+    fun dismissBrowseError() { _browse.value = _browse.value.copy(error = null) }
+
+    // Download a chosen file into the app's model folder (no storage permission needed),
+    // then rescan so it shows up in the installed list. Runs under the foreground service
+    // so a long download survives the screen locking.
+    fun downloadLocalModel(repoId: String, file: HfFileOption) {
+        if (_browse.value.downloading) return
+        val dir = getApplication<Application>().getExternalFilesDir(null)
+            ?: getApplication<Application>().filesDir
+        val outFile = java.io.File(dir, file.label)
+        cancelDownload = false
+        _browse.value = _browse.value.copy(downloading = true, downloadStatus = "Starting...", quantRepo = null, error = null)
+        GenerationService.begin(getApplication())
+        downloadJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                ServerClient.downloadTo(repoId, file.path, outFile, isCancelled = { cancelDownload }) { done, total ->
+                    val status = if (total > 0) {
+                        val pct = (100 * done / total).toInt()
+                        "${file.label}  $pct%  (${gb(done)}/${gb(total)})"
+                    } else "${file.label}  ${gb(done)}"
+                    _browse.value = _browse.value.copy(downloadStatus = status)
+                }
+                val list = ModelStore.scan(getApplication())
+                withContext(Dispatchers.Main) {
+                    _models.value = list
+                    // Clear the search once a download lands, so the user sees the installed list.
+                    _browse.value = _browse.value.copy(
+                        downloading = false, downloadStatus = null, results = emptyList(), quants = emptyList())
+                }
+            } catch (e: Exception) {
+                val msg = if (cancelDownload) "Download cancelled." else (e.message ?: "Download failed.")
+                withContext(Dispatchers.Main) {
+                    _browse.value = _browse.value.copy(downloading = false, downloadStatus = null, error = msg)
+                }
+            } finally {
+                GenerationService.end(getApplication())
+            }
+        }
+    }
+
+    private fun gb(b: Long): String {
+        val g = b / 1024.0 / 1024.0 / 1024.0
+        return if (g >= 1.0) String.format("%.1f GB", g) else String.format("%.0f MB", b / 1024.0 / 1024.0)
+    }
 
     fun refreshModels() {
         viewModelScope.launch(Dispatchers.IO) {

@@ -18,6 +18,8 @@ import java.net.URL
 // A Hugging Face search hit, and one downloadable quant within a repo.
 data class HfModel(val id: String, val updated: String, val downloads: Long)
 data class HfQuant(val fileName: String, val tag: String)
+// A downloadable .gguf file inside a repo, with its real size (for phone-side download).
+data class HfFileRaw(val path: String, val sizeBytes: Long)
 
 object ServerClient {
 
@@ -102,6 +104,89 @@ object ServerClient {
             }
             return out.values.toList()
         } finally { conn.disconnect() }
+    }
+
+    /**
+     * List the .gguf files in a repo WITH their byte sizes, via the tree API. Used on
+     * the phone so the app can recommend which files will run smoothly. Multi-part shards
+     * past the first are skipped (the phone can't stitch them anyway).
+     */
+    fun listHfFiles(repoId: String): List<HfFileRaw> {
+        val url = "https://huggingface.co/api/models/$repoId/tree/main?recursive=true"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"; connectTimeout = 8000; readTimeout = 12000
+            setRequestProperty("User-Agent", "waide-app")
+        }
+        try {
+            if (conn.responseCode != 200) throw IllegalStateException("Hugging Face returned ${conn.responseCode}")
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val arr = JSONArray(body)
+            val out = ArrayList<HfFileRaw>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                if (o.optString("type") != "file") continue
+                val path = o.optString("path")
+                if (!path.endsWith(".gguf", ignoreCase = true)) continue
+                if (Regex("(?i)-0000[2-9]-of-").containsMatchIn(path)) continue
+                out.add(HfFileRaw(path, o.optLong("size", 0L)))
+            }
+            // smallest first, so the lightest (phone-friendliest) options are up top
+            return out.sortedBy { it.sizeBytes }
+        } finally { conn.disconnect() }
+    }
+
+    /**
+     * Download a repo file straight to the phone, streaming to `outFile`. Reports progress
+     * as (bytesDone, totalBytes); totalBytes is -1 when the server doesn't send a length.
+     * Writes to a .part file and renames on success, so a half-download never looks complete.
+     */
+    fun downloadTo(
+        repoId: String, path: String, outFile: java.io.File,
+        isCancelled: () -> Boolean = { false },
+        onProgress: (Long, Long) -> Unit
+    ) {
+        val encPath = path.split('/').joinToString("/") {
+            java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")
+        }
+        val url = "https://huggingface.co/$repoId/resolve/main/$encPath?download=true"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"; connectTimeout = 15000; readTimeout = 60000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "waide-app")
+        }
+        val part = java.io.File(outFile.parentFile, outFile.name + ".part")
+        try {
+            if (conn.responseCode != 200) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                throw IllegalStateException("Download failed (${conn.responseCode})${if (err != null) ": ${err.take(200)}" else ""}")
+            }
+            val total = conn.contentLengthLong
+            part.outputStream().use { out ->
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(1 shl 16)
+                    var done = 0L
+                    var lastReport = 0L
+                    while (true) {
+                        if (isCancelled()) throw java.io.InterruptedIOException("cancelled")
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        if (done - lastReport > 1_000_000 || n < buf.size) {
+                            lastReport = done
+                            onProgress(done, total)
+                        }
+                    }
+                }
+            }
+            if (outFile.exists()) outFile.delete()
+            if (!part.renameTo(outFile)) throw IllegalStateException("Could not save the file.")
+        } catch (e: Exception) {
+            runCatching { part.delete() }
+            throw e
+        } finally {
+            conn.disconnect()
+        }
     }
 
     /** DELETE {base}/api/delete — remove a model from the server. */

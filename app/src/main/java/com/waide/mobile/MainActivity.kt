@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,7 +31,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.waide.mobile.ui.ChatScreen
 import com.waide.mobile.ui.ConversationsScreen
-import com.waide.mobile.ui.ModelsScreen
 import com.waide.mobile.ui.ServerScreen
 import com.waide.mobile.ui.SettingsScreen
 import com.waide.mobile.ui.W
@@ -77,10 +75,9 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    Chat("Chat", Icons.Filled.Chat),
-    Models("Models", Icons.Filled.Memory),
-    Server("Server", Icons.Filled.Cloud),
-    Convos("Convos", Icons.Filled.Lock),
+    Chat("Local Chat", Icons.Filled.Chat),
+    Server("Server Chat", Icons.Filled.Cloud),
+    Convos("Saved Chats", Icons.Filled.Lock),
     Settings("Settings", Icons.Filled.Tune)
 }
 
@@ -98,6 +95,7 @@ private fun Shell(
     val state by vm.state.collectAsState()
     val settings by vm.settings.collectAsState()
     val models by vm.models.collectAsState()
+    val browse by vm.browse.collectAsState()
     val serverState by svm.state.collectAsState()
     val convState by cvm.state.collectAsState()
 
@@ -175,17 +173,6 @@ private fun Shell(
                     onSend = { vm.send(it) },
                     onStop = { vm.stopGeneration() }
                 )
-                Tab.Models -> ModelsScreen(
-                    models = models,
-                    loadedName = state.modelName,
-                    loading = state.modelLoading,
-                    hasStorageAccess = storageOk,
-                    onGrantStorage = requestAllFiles,
-                    onRefresh = { vm.refreshModels() },
-                    onLoad = { vm.loadModel(it); tab = Tab.Chat },
-                    onUnload = { vm.unloadModel() },
-                    onDelete = { vm.deleteLocalModel(it) }
-                )
                 Tab.Server -> ServerScreen(
                     state = serverState,
                     hasServerUrl = serverState.servers.any { it.id == serverState.activeServerId },
@@ -238,7 +225,23 @@ private fun Shell(
                     onSearchHf = { svm.searchHf(it) },
                     onOpenQuants = { svm.openQuants(it) },
                     onCloseQuants = { svm.closeQuants() },
-                    onPullHf = { repo, tag -> svm.pullHf(repo, tag) }
+                    onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
+                    localModels = models,
+                    loadedModelName = state.modelName,
+                    modelLoading = state.modelLoading,
+                    hasStorageAccess = storageOk,
+                    onGrantStorage = requestAllFiles,
+                    onRefreshLocal = { vm.refreshModels() },
+                    onLoadLocal = { vm.loadModel(it); tab = Tab.Chat },
+                    onUnloadLocal = { vm.unloadModel() },
+                    onDeleteLocal = { vm.deleteLocalModel(it) },
+                    localBrowse = browse,
+                    onLocalSearchHf = { vm.searchLocalHf(it) },
+                    onLocalOpenQuants = { vm.openLocalQuants(it) },
+                    onLocalCloseQuants = { vm.closeLocalQuants() },
+                    onLocalCloseSearch = { vm.closeLocalSearch() },
+                    onLocalDownload = { repo, f -> vm.downloadLocalModel(repo, f) },
+                    onLocalCancelDownload = { vm.cancelLocalDownload() }
                 )
             }
         }
