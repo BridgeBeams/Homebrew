@@ -82,6 +82,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var downloadJob: Job? = null
     @Volatile private var cancelDownload = false
+    private var autoLoadTried = false
+
+    /**
+     * Called the first time Local Chat is opened. Reloads the last model that was loaded
+     * so chat is ready without a trip to Settings, but only once per app run and only if
+     * nothing is loaded yet, so it never fights a manual unload or a model you just picked.
+     * Silent: a missing or unreadable file just stays unloaded, no error at launch.
+     */
+    fun ensureLocalModelLoaded() {
+        if (autoLoadTried) return
+        autoLoadTried = true
+        if (_state.value.modelName.isNotEmpty() || _state.value.modelLoading) return
+        val path = _settings.value.lastModelPath
+        if (path.isBlank()) return
+        val f = java.io.File(path)
+        if (f.exists() && f.canRead()) {
+            loadModel(GgufFile(f.name, f.absolutePath, f.length()), silent = true)
+        }
+    }
 
     // Physical RAM on this device; used to judge which models will run smoothly.
     private val totalRam: Long by lazy {
@@ -221,7 +240,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(error = null)
     }
 
-    fun loadModel(file: GgufFile) {
+    fun loadModel(file: GgufFile, silent: Boolean = false) {
         if (_state.value.modelLoading || _state.value.busy) return
         _state.value = _state.value.copy(modelLoading = true, error = null)
         viewModelScope.launch(Dispatchers.Default) {
@@ -248,7 +267,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     "That model would not load."
                 }
                 withContext(Dispatchers.Main) {
-                    _state.value = _state.value.copy(modelLoading = false, error = err)
+                    _state.value = _state.value.copy(modelLoading = false, error = if (silent) null else err)
                 }
             }
         }

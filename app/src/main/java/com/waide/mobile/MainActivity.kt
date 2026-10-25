@@ -118,8 +118,11 @@ private fun Shell(
     }
 
     // Leaving the Conversations tab locks it again (nothing stays unlocked in the background).
+    // Opening Local Chat loads the last-used model (once per run), so startup stays instant
+    // when you only want the Server or Saved tabs.
     LaunchedEffect(tab) {
         if (tab != Tab.Convos) cvm.lock()
+        if (tab == Tab.Chat) vm.ensureLocalModelLoaded()
     }
 
     Scaffold(
