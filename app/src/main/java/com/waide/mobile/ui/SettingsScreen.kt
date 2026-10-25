@@ -11,6 +11,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.waide.mobile.GgufFile
+import com.waide.mobile.HfFileOption
+import com.waide.mobile.LocalModelBrowse
 import com.waide.mobile.ServerEntry
 import com.waide.mobile.ServerState
 import com.waide.mobile.WaideSettings
@@ -36,6 +39,24 @@ fun SettingsScreen(
     onOpenQuants: (String) -> Unit = {},
     onCloseQuants: () -> Unit = {},
     onPullHf: (String, String) -> Unit = { _, _ -> },
+    // local models (the on-phone Chat tab)
+    localModels: List<GgufFile> = emptyList(),
+    loadedModelName: String = "",
+    modelLoading: Boolean = false,
+    hasStorageAccess: Boolean = true,
+    onGrantStorage: () -> Unit = {},
+    onRefreshLocal: () -> Unit = {},
+    onLoadLocal: (GgufFile) -> Unit = {},
+    onUnloadLocal: () -> Unit = {},
+    onDeleteLocal: (GgufFile) -> Unit = {},
+    // local model search/download (Hugging Face, straight to the phone)
+    localBrowse: LocalModelBrowse = LocalModelBrowse(),
+    onLocalSearchHf: (String) -> Unit = {},
+    onLocalOpenQuants: (String) -> Unit = {},
+    onLocalCloseQuants: () -> Unit = {},
+    onLocalCloseSearch: () -> Unit = {},
+    onLocalDownload: (String, HfFileOption) -> Unit = { _, _ -> },
+    onLocalCancelDownload: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var system by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
@@ -44,6 +65,7 @@ fun SettingsScreen(
     var unhideDialog by remember { mutableStateOf(false) }
     var unhideMsg by remember { mutableStateOf<String?>(null) }
     var managingModels by remember { mutableStateOf(false) }
+    var managingLocal by remember { mutableStateOf(false) }
 
     // The full-screen server-models manager (search, pull, delete, pick answering model
     // and image reader). Swaps in over Settings, same pattern the Server tab used before.
@@ -65,6 +87,31 @@ fun SettingsScreen(
         return
     }
 
+    // The on-phone model picker (scans Downloads for .gguf). Same swap-in pattern.
+    if (managingLocal) {
+        ModelsScreen(
+            models = localModels,
+            loadedName = loadedModelName,
+            loading = modelLoading,
+            hasStorageAccess = hasStorageAccess,
+            onGrantStorage = onGrantStorage,
+            onRefresh = onRefreshLocal,
+            onLoad = onLoadLocal,
+            onUnload = onUnloadLocal,
+            onDelete = onDeleteLocal,
+            onBack = { managingLocal = false },
+            browse = localBrowse,
+            onSearchHf = onLocalSearchHf,
+            onOpenQuants = onLocalOpenQuants,
+            onCloseQuants = onLocalCloseQuants,
+            onCloseSearch = onLocalCloseSearch,
+            onDownload = onLocalDownload,
+            onCancelDownload = onLocalCancelDownload,
+            modifier = modifier
+        )
+        return
+    }
+
     Column(
         modifier
             .fillMaxSize()
@@ -74,9 +121,9 @@ fun SettingsScreen(
         Text("MACHINES", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(6.dp))
         Text(
-            "The servers the Server tab can reach, each by its Tailscale address " +
+            "The servers the Server Chat tab can reach, each by its Tailscale address " +
                 "(http://100.x.y.z:11434). Add more as you set up more machines, then " +
-                "switch between them from the dropdown on the Server tab.",
+                "switch between them from the dropdown on the Server Chat tab.",
             color = W.Muted, style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(10.dp))
@@ -125,7 +172,7 @@ fun SettingsScreen(
         Text("SERVER MODELS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(6.dp))
         Text(
-            "One place for the whole server side. The amnesia Server tab and the Convos " +
+            "One place for the whole server side. The Server Chat tab and the Saved Chats " +
                 "tab both use the answering model and image reader you pick here. Search for, " +
                 "download, and delete models too.",
             color = W.Muted, style = MaterialTheme.typography.bodyMedium
@@ -181,6 +228,25 @@ fun SettingsScreen(
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
         Spacer(Modifier.height(18.dp))
+        Text("LOCAL MODELS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Models that run on the phone itself, for the Local Chat tab. Drop a .gguf file " +
+                "into your Downloads folder, then pick it here.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("Loaded: ${loadedModelName.ifBlank { "none" }}",
+            color = W.Text, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { managingLocal = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Manage local models") }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
         Text("ENGINE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(12.dp))
 
@@ -190,7 +256,7 @@ fun SettingsScreen(
             range = 1024f..16384f,
             steps = 14,
             display = "${settings.contextSize} tokens",
-            help = "For the on-phone Chat tab. How much conversation the local model can hold. Bigger uses more of the phone's RAM. Takes effect when you next load a model."
+            help = "For the on-phone Local Chat tab. How much conversation the local model can hold. Bigger uses more of the phone's RAM. Takes effect when you next load a model."
         ) { onChange(settings.copy(contextSize = (it / 1024).toInt() * 1024)) }
 
         Slider2(

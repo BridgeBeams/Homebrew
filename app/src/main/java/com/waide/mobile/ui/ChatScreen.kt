@@ -84,7 +84,7 @@ fun ChatScreen(
                     Spacer(Modifier.height(10.dp))
                     Text(
                         if (state.modelName.isBlank())
-                            "Open Models and load a .gguf file to start."
+                            "Go to Settings > Manage local models and load a .gguf file to start."
                         else "Running on this phone. Nothing leaves the device.",
                         color = W.Muted,
                         textAlign = TextAlign.Center,
