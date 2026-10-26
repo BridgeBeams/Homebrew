@@ -28,6 +28,7 @@ fun SettingsScreen(
     serverCtx: Int = 8192,
     onServerCtxChange: (Int) -> Unit = {},
     onUnhideAll: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    onUnhideAllAgents: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     // server models (shared by the amnesia Server tab and the Convos tab)
     serverState: ServerState = ServerState(),
     onRefreshModels: () -> Unit = {},
@@ -63,6 +64,7 @@ fun SettingsScreen(
     var newName by remember { mutableStateOf("") }
     var newUrl by remember { mutableStateOf("") }
     var unhideDialog by remember { mutableStateOf(false) }
+    var unhideAgentsDialog by remember { mutableStateOf(false) }
     var unhideMsg by remember { mutableStateOf<String?>(null) }
     var managingModels by remember { mutableStateOf(false) }
     var managingLocal by remember { mutableStateOf(false) }
@@ -207,11 +209,11 @@ fun SettingsScreen(
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
         Spacer(Modifier.height(18.dp))
-        Text("CONVERSATIONS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Text("SAVED CHATS (PRIVATE)", style = MaterialTheme.typography.labelSmall, color = W.Amber)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Reveal every hidden conversation at once, so you enter your PIN a single " +
-                "time instead of unhiding them one by one.",
+            "Reveal everything hidden at once, so you enter your PIN a single time instead " +
+                "of unhiding one by one.",
             color = W.Muted, style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(10.dp))
@@ -219,6 +221,11 @@ fun SettingsScreen(
             onClick = { unhideMsg = null; unhideDialog = true },
             colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
         ) { Text("Unhide all conversations") }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { unhideMsg = null; unhideAgentsDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Unhide all agents") }
         unhideMsg?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, color = if (it.startsWith("Revealed")) W.Muted else W.Danger,
@@ -331,6 +338,17 @@ fun SettingsScreen(
                     }
                 },
                 onCancel = { unhideDialog = false }
+            )
+        }
+        if (unhideAgentsDialog) {
+            UnhideAllDialog(
+                onSubmit = { pin ->
+                    onUnhideAllAgents(pin) { err ->
+                        unhideMsg = err ?: "Revealed all hidden agents."
+                        unhideAgentsDialog = false
+                    }
+                },
+                onCancel = { unhideAgentsDialog = false }
             )
         }
     }

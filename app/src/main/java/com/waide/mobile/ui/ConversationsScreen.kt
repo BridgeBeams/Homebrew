@@ -40,6 +40,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.waide.mobile.AgentState
 import com.waide.mobile.ConvHit
 import com.waide.mobile.ConvMsg
 import com.waide.mobile.ConvState
@@ -80,14 +82,85 @@ fun ConversationsScreen(
     onClearImage: () -> Unit,
     onSearch: (String) -> Unit,
     onClearSearch: () -> Unit,
+    // agents (same PIN session)
+    agentState: AgentState,
+    onAgentRefresh: () -> Unit,
+    onAgentOpen: (String) -> Unit,
+    onAgentNew: (String, String) -> Unit,
+    onAgentClose: () -> Unit,
+    onAgentSend: (String) -> Unit,
+    onAgentStop: () -> Unit,
+    onAgentEdit: (String, String, String) -> Unit,
+    onAgentDelete: (String) -> Unit,
+    onAgentDeleteMsg: (String) -> Unit,
+    onAgentHide: (String) -> Unit,
+    onAgentRequestUnhide: (String) -> Unit,
+    onAgentSubmitUnhide: (String) -> Unit,
+    onAgentCancelUnhide: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when {
-        state.locked -> PinGate(state, onUnlock, modifier)
-        state.openId == null -> ConvList(state, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
-            onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch, modifier)
-        else -> ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onRename,
-            onDeleteConv, onImagePicked, onClearImage, modifier)
+    if (state.locked) {
+        PinGate(state, onUnlock, modifier)
+        return
+    }
+    // Unlocked: a Chats | Agents toggle sits on top, hidden while a thread is open.
+    var section by remember { mutableStateOf(0) }   // 0 = Chats, 1 = Agents
+    val showToggle = state.openId == null && agentState.openId == null
+    Column(modifier.fillMaxSize()) {
+        if (showToggle) {
+            Row(
+                Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SectionTab("Chats", section == 0, Modifier.weight(1f)) { section = 0 }
+                Spacer(Modifier.width(8.dp))
+                SectionTab("Agents", section == 1, Modifier.weight(1f)) { section = 1 }
+            }
+            HorizontalDivider(color = W.Line)
+        }
+        if (section == 0) {
+            if (state.openId == null)
+                ConvList(state, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
+                    onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch,
+                    Modifier.weight(1f))
+            else
+                ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onRename,
+                    onDeleteConv, onImagePicked, onClearImage, Modifier.weight(1f))
+        } else {
+            AgentsPane(
+                state = agentState,
+                onRefresh = onAgentRefresh,
+                onOpen = onAgentOpen,
+                onNew = onAgentNew,
+                onClose = onAgentClose,
+                onSend = onAgentSend,
+                onStop = onAgentStop,
+                onEdit = onAgentEdit,
+                onDeleteAgent = onAgentDelete,
+                onDeleteMsg = onAgentDeleteMsg,
+                onHide = onAgentHide,
+                onRequestUnhide = onAgentRequestUnhide,
+                onSubmitUnhide = onAgentSubmitUnhide,
+                onCancelUnhide = onAgentCancelUnhide,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionTab(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) W.SurfaceHi else W.Bg)
+            .border(1.dp, if (selected) W.Amber else W.Line, RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = if (selected) W.Amber else W.Muted,
+            style = MaterialTheme.typography.labelLarge)
     }
 }
 
