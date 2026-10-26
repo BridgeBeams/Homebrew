@@ -98,6 +98,7 @@ private fun Shell(
     val browse by vm.browse.collectAsState()
     val serverState by svm.state.collectAsState()
     val convState by cvm.state.collectAsState()
+    val agentState by cvm.agentState.collectAsState()
 
     // Re-check permission and rescan whenever the app comes back to the front,
     // which is exactly when a download has just finished or access was granted.
@@ -208,7 +209,21 @@ private fun Shell(
                     onImagePicked = { cvm.attachImage(it) },
                     onClearImage = { cvm.clearImage() },
                     onSearch = { cvm.setQuery(it) },
-                    onClearSearch = { cvm.clearSearch() }
+                    onClearSearch = { cvm.clearSearch() },
+                    agentState = agentState,
+                    onAgentRefresh = { cvm.refreshAgents() },
+                    onAgentOpen = { cvm.openAgent(it) },
+                    onAgentNew = { n, j -> cvm.createAgent(n, j) },
+                    onAgentClose = { cvm.closeAgent() },
+                    onAgentSend = { cvm.sendToAgent(it) },
+                    onAgentStop = { cvm.stopAgent() },
+                    onAgentEdit = { id, n, j -> cvm.editAgent(id, n, j) },
+                    onAgentDelete = { cvm.deleteAgent(it) },
+                    onAgentDeleteMsg = { cvm.deleteAgentMsg(it) },
+                    onAgentHide = { cvm.hideAgent(it) },
+                    onAgentRequestUnhide = { cvm.requestUnhideAgent(it) },
+                    onAgentSubmitUnhide = { cvm.submitUnhideAgent(it) },
+                    onAgentCancelUnhide = { cvm.cancelUnhideAgent() }
                 )
                 Tab.Settings -> SettingsScreen(
                     settings = settings,
@@ -219,6 +234,7 @@ private fun Shell(
                     serverCtx = serverState.ctx,
                     onServerCtxChange = { svm.setCtx(it) },
                     onUnhideAll = { pin, cb -> cvm.unhideAll(pin, cb) },
+                    onUnhideAllAgents = { pin, cb -> cvm.unhideAllAgents(pin, cb) },
                     serverState = serverState,
                     onRefreshModels = { svm.refreshModels() },
                     onSelectModel = { svm.selectModel(it) },

@@ -46,6 +46,21 @@ data class ConvState(
     val visionModel: String = ""
 )
 
+// The Agents side of the private area. Shares the same PIN session as conversations.
+data class AgentState(
+    val agents: List<AgentSummary> = emptyList(),
+    val loadingList: Boolean = false,
+    val openId: String? = null,
+    val openName: String = "",
+    val openJob: String = "",
+    val messages: List<AgentMsg> = emptyList(),
+    val streaming: String? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+    val unhideTarget: String? = null,   // an agent awaiting the PIN to reveal
+    val unhideError: String? = null
+)
+
 /**
  * The private, PIN-locked Conversations tab. Nothing is cached on the phone: the
  * token lives only in memory, and lock() wipes everything, so leaving the tab or
@@ -57,8 +72,12 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(ConvState())
     val state: StateFlow<ConvState> = _state.asStateFlow()
 
+    private val _agentState = MutableStateFlow(AgentState())
+    val agentState: StateFlow<AgentState> = _agentState.asStateFlow()
+
     private var token: String = ""
     private var genJob: Job? = null
+    private var agentGenJob: Job? = null
 
     private fun base(): String {
         val servers = store.loadServers()
@@ -69,8 +88,10 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun lock() {
         genJob?.cancel()
+        agentGenJob?.cancel()
         token = ""
         _state.value = ConvState()   // back to locked, everything cleared
+        _agentState.value = AgentState()
     }
 
     fun unlock(pin: String) {
@@ -91,6 +112,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                         selectedModel = store.getServerModel())
                     refreshList()
                     refreshModels()
+                    refreshAgents()
                 }.onFailure {
                     _state.value = _state.value.copy(authBusy = false, authError = it.message ?: "Login failed")
                 }
@@ -360,6 +382,178 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 r.onSuccess {
                     if (!_state.value.locked) refreshList()
+                    onDone(null)
+                }.onFailure { onDone(it.message ?: "wrong pin") }
+            }
+        }
+    }
+
+    // ================================================================= AGENTS
+    // Same PIN session (token) as conversations. Agents read across your saved
+    // conversations (hidden excluded, server-side) and keep their own memory.
+
+    fun refreshAgents() {
+        if (token.isBlank()) return
+        val b = base()
+        _agentState.value = _agentState.value.copy(loadingList = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.list(b, token) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _agentState.value = _agentState.value.copy(agents = it, loadingList = false, error = null) }
+                 .onFailure { _agentState.value = _agentState.value.copy(loadingList = false, error = it.message) }
+            }
+        }
+    }
+
+    fun openAgent(id: String) {
+        val b = base()
+        _agentState.value = _agentState.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.get(b, token, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d ->
+                    _agentState.value = _agentState.value.copy(
+                        openId = id, openName = d.name, openJob = d.job, messages = d.messages, busy = false)
+                }.onFailure { _agentState.value = _agentState.value.copy(busy = false, error = it.message) }
+            }
+        }
+    }
+
+    private fun reloadOpenAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.get(b, token, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d -> _agentState.value = _agentState.value.copy(
+                    openName = d.name, openJob = d.job, messages = d.messages) }
+            }
+        }
+    }
+
+    fun closeAgent() {
+        agentGenJob?.cancel()
+        _agentState.value = _agentState.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false)
+        refreshAgents()
+    }
+
+    fun createAgent(name: String, job: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.create(b, token, name, job) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { id ->
+                    _agentState.value = _agentState.value.copy(
+                        openId = id, openName = name, openJob = job, messages = emptyList(),
+                        streaming = null, busy = false, error = null)
+                }.onFailure { _agentState.value = _agentState.value.copy(error = it.message) }
+            }
+        }
+    }
+
+    fun editAgent(id: String, name: String, job: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { AgentsClient.edit(b, token, id, name, job) }
+            withContext(Dispatchers.Main) {
+                if (_agentState.value.openId == id)
+                    _agentState.value = _agentState.value.copy(openName = name, openJob = job)
+                refreshAgents()
+            }
+        }
+    }
+
+    fun deleteAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { AgentsClient.deleteAgent(b, token, id) }
+            withContext(Dispatchers.Main) {
+                if (_agentState.value.openId == id) _agentState.value = _agentState.value.copy(openId = null, messages = emptyList())
+                refreshAgents()
+            }
+        }
+    }
+
+    fun deleteAgentMsg(mid: String) {
+        val id = _agentState.value.openId ?: return
+        val b = base()
+        _agentState.value = _agentState.value.copy(messages = _agentState.value.messages.filter { it.id != mid })
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { AgentsClient.deleteMsg(b, token, id, mid) }
+        }
+    }
+
+    fun sendToAgent(text: String) {
+        val id = _agentState.value.openId ?: return
+        val model = store.getServerModel()
+        val prompt = text.trim()
+        if (_agentState.value.busy || prompt.isEmpty()) return
+        if (model.isBlank()) {
+            _agentState.value = _agentState.value.copy(error = "Pick an answering model in Settings first.")
+            return
+        }
+        val b = base()
+        val localUser = AgentMsg("local-${System.currentTimeMillis()}", "user", prompt)
+        _agentState.value = _agentState.value.copy(
+            messages = _agentState.value.messages + localUser, streaming = "", busy = true, error = null)
+        GenerationService.begin(getApplication())
+        agentGenJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var acc = ""
+                AgentsClient.chatStream(b, token, id, model, prompt, 8192) { piece ->
+                    acc += piece
+                    _agentState.value = _agentState.value.copy(streaming = acc)
+                }
+                withContext(Dispatchers.Main) {
+                    _agentState.value = _agentState.value.copy(streaming = null, busy = false)
+                    reloadOpenAgent(id)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _agentState.value = _agentState.value.copy(busy = false, streaming = null, error = e.message ?: "Server error")
+                }
+            } finally {
+                GenerationService.end(getApplication())
+            }
+        }
+    }
+
+    fun stopAgent() {
+        agentGenJob?.cancel()
+        _agentState.value = _agentState.value.copy(busy = false, streaming = null)
+    }
+
+    fun hideAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { AgentsClient.hide(b, token, id) }
+            withContext(Dispatchers.Main) { refreshAgents() }
+        }
+    }
+
+    fun requestUnhideAgent(id: String) { _agentState.value = _agentState.value.copy(unhideTarget = id, unhideError = null) }
+    fun cancelUnhideAgent() { _agentState.value = _agentState.value.copy(unhideTarget = null, unhideError = null) }
+
+    fun submitUnhideAgent(pin: String) {
+        val id = _agentState.value.unhideTarget ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.unhide(b, token, id, pin) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    _agentState.value = _agentState.value.copy(unhideTarget = null, unhideError = null)
+                    refreshAgents()
+                }.onFailure { _agentState.value = _agentState.value.copy(unhideError = it.message ?: "wrong pin") }
+            }
+        }
+    }
+
+    fun unhideAllAgents(pin: String, onDone: (String?) -> Unit) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { AgentsClient.unhideAll(b, pin) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    if (!_state.value.locked) refreshAgents()
                     onDone(null)
                 }.onFailure { onDone(it.message ?: "wrong pin") }
             }
