@@ -28,6 +28,7 @@ data class ChatState(
     val modelLoading: Boolean = false,
     val tokensPerSecond: Float = 0f,
     val contextUsed: Int = 0,
+    val contextSize: Int = 0,   // the loaded model's context ceiling (from Settings)
     val error: String? = null
 )
 
@@ -259,7 +260,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         modelName = file.name,
                         messages = emptyList(),
                         streaming = null,
-                        contextUsed = 0
+                        contextUsed = 0,
+                        contextSize = s.contextSize
                     )
                 }
             } else {
