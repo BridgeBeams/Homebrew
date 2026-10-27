@@ -729,6 +729,39 @@ def search_convs(q):
     return out
 
 
+def search_premium(q):
+    """Keyword search over premium conversation titles and message bodies. Hidden
+    premium conversations are skipped entirely, so search never exposes hidden content."""
+    needle = (q or "").strip().lower()
+    out = []
+    if not needle:
+        return out
+    for p in PREMIUM_DIR.glob("*.json"):
+        try:
+            c = json.loads(p.read_text("utf-8"))
+            if c.get("hidden"):
+                continue
+            title = c.get("title", "Untitled")
+            msgs = c.get("messages", [])
+            if needle in title.lower():
+                snippet = title
+            else:
+                for m in msgs:
+                    t = m.get("text", "")
+                    if needle in t.lower():
+                        snippet = _snippet(t, needle)
+                        break
+                else:
+                    continue
+            out.append({"id": c["id"], "title": title, "mode": c.get("mode", "single"),
+                        "models": c.get("models", []), "model": c.get("model", ""),
+                        "updated": c.get("updated", 0), "count": len(msgs), "snippet": snippet})
+        except Exception:
+            pass
+    out.sort(key=lambda x: x["updated"], reverse=True)
+    return out
+
+
 def create_conv(title):
     cid = uuid.uuid4().hex
     save_conv({"id": cid, "title": title or "New conversation", "messages": [], "hidden": False})
@@ -1495,6 +1528,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "GET" and parts == ["premium", "conversations"]:
             return self._send_json(200, list_premium())
+
+        # Must come before the /premium/conversations/{id} route below, or "search"
+        # would be read as a conversation id.
+        if method == "GET" and parts == ["premium", "conversations", "search"]:
+            from urllib.parse import parse_qs
+            q = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            return self._send_json(200, search_premium(q))
 
         if method == "POST" and parts == ["premium", "conversations"]:
             b = self._read_body()
