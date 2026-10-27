@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Close
@@ -82,6 +83,14 @@ fun ConversationsScreen(
     onClearImage: () -> Unit,
     onSearch: (String) -> Unit,
     onClearSearch: () -> Unit,
+    // conversation files folder + compaction
+    onOpenFiles: () -> Unit,
+    onCloseFiles: () -> Unit,
+    onRefreshFiles: () -> Unit,
+    onReattachFile: (String) -> Unit,
+    onDownloadFile: (String) -> Unit,
+    onDismissFilesMsg: () -> Unit,
+    onDismissCompacting: () -> Unit,
     // agents (same PIN session)
     agentState: AgentState,
     onAgentRefresh: () -> Unit,
@@ -125,7 +134,9 @@ fun ConversationsScreen(
                     Modifier.weight(1f))
             else
                 ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onRename,
-                    onDeleteConv, onImagePicked, onClearImage, Modifier.weight(1f))
+                    onDeleteConv, onImagePicked, onClearImage,
+                    onOpenFiles, onCloseFiles, onRefreshFiles, onReattachFile,
+                    onDownloadFile, onDismissFilesMsg, onDismissCompacting, Modifier.weight(1f))
         } else {
             AgentsPane(
                 state = agentState,
@@ -454,6 +465,13 @@ private fun ConvChat(
     onDeleteConv: (String) -> Unit,
     onImagePicked: (Uri) -> Unit,
     onClearImage: () -> Unit,
+    onOpenFiles: () -> Unit,
+    onCloseFiles: () -> Unit,
+    onRefreshFiles: () -> Unit,
+    onReattachFile: (String) -> Unit,
+    onDownloadFile: (String) -> Unit,
+    onDismissFilesMsg: () -> Unit,
+    onDismissCompacting: () -> Unit,
     modifier: Modifier
 ) {
     var draft by remember { mutableStateOf("") }
@@ -483,6 +501,9 @@ private fun ConvChat(
             Text(state.openTitle.ifBlank { "Conversation" }, color = W.Text,
                 style = MaterialTheme.typography.titleSmall, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            IconButton(onClick = onOpenFiles) {
+                Icon(Icons.Filled.Folder, contentDescription = "Conversation files", tint = W.Amber)
+            }
             Box {
                 IconButton(onClick = { topMenu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Options", tint = W.Muted) }
                 DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
@@ -492,6 +513,26 @@ private fun ConvChat(
             }
         }
         HorizontalDivider(color = W.Line)
+
+        if (state.compactingNotice) {
+            LaunchedEffect(state.compactedAt) { kotlinx.coroutines.delay(4000); onDismissCompacting() }
+            Text("Compacting this conversation so we can keep chatting...",
+                color = Color(0xFF1A1204), style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.fillMaxWidth().background(W.Amber).padding(horizontal = 14.dp, vertical = 8.dp))
+        } else if (state.compactedCount > 0) {
+            Text("Earlier turns are summarized to keep this chat fast. Your full history is still shown below, and uploaded images are in the folder.",
+                color = W.Muted, style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth().background(W.SurfaceHi).padding(horizontal = 14.dp, vertical = 6.dp))
+        }
+        state.filesMsg?.let { msg ->
+            Row(Modifier.fillMaxWidth().background(W.SurfaceHi).padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(msg, color = W.Text, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismissFilesMsg, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text("OK", color = W.Amber)
+                }
+            }
+        }
 
         if (state.messages.isEmpty() && streamingText == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -622,6 +663,13 @@ private fun ConvChat(
         )
     }
     zoomB64?.let { b64 -> ImageZoomDialog(b64) { zoomB64 = null } }
+    if (state.filesOpen) {
+        ConvFilesDialog(
+            files = state.files, loading = state.loadingFiles,
+            onReattach = onReattachFile, onDownload = onDownloadFile,
+            onRefresh = onRefreshFiles, onClose = onCloseFiles
+        )
+    }
 }
 
 /** Full-screen pinch/drag zoom for an attached image. Tap outside or back to close. */
