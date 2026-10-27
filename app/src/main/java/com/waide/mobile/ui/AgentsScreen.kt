@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -39,11 +40,11 @@ fun AgentsPane(
     state: AgentState,
     onRefresh: () -> Unit,
     onOpen: (String) -> Unit,
-    onNew: (String, String) -> Unit,
+    onNew: (String, String, Boolean) -> Unit,
     onClose: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onEdit: (String, String, String) -> Unit,
+    onEdit: (String, String, String, Boolean) -> Unit,
     onDeleteAgent: (String) -> Unit,
     onDeleteMsg: (String) -> Unit,
     onHide: (String) -> Unit,
@@ -65,8 +66,8 @@ private fun AgentList(
     state: AgentState,
     onRefresh: () -> Unit,
     onOpen: (String) -> Unit,
-    onNew: (String, String) -> Unit,
-    onEdit: (String, String, String) -> Unit,
+    onNew: (String, String, Boolean) -> Unit,
+    onEdit: (String, String, String, Boolean) -> Unit,
     onDeleteAgent: (String) -> Unit,
     onHide: (String) -> Unit,
     onRequestUnhide: (String) -> Unit,
@@ -162,12 +163,12 @@ private fun AgentList(
     }
 
     if (createOpen) {
-        AgentEditDialog("New agent", "", "",
-            onConfirm = { n, j -> onNew(n, j); createOpen = false }, onDismiss = { createOpen = false })
+        AgentEditDialog("New agent", "", "", false,
+            onConfirm = { n, j, rp -> onNew(n, j, rp); createOpen = false }, onDismiss = { createOpen = false })
     }
     editFor?.let { ag ->
-        AgentEditDialog("Edit agent", ag.name, ag.job,
-            onConfirm = { n, j -> onEdit(ag.id, n, j); editFor = null }, onDismiss = { editFor = null })
+        AgentEditDialog("Edit agent", ag.name, ag.job, ag.readPremium,
+            onConfirm = { n, j, rp -> onEdit(ag.id, n, j, rp); editFor = null }, onDismiss = { editFor = null })
     }
     deleteFor?.let { ag ->
         AlertDialog(
@@ -191,7 +192,7 @@ private fun AgentChat(
     onClose: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onEdit: (String, String, String) -> Unit,
+    onEdit: (String, String, String, Boolean) -> Unit,
     onDeleteAgent: (String) -> Unit,
     onDeleteMsg: (String) -> Unit,
     modifier: Modifier
@@ -291,8 +292,8 @@ private fun AgentChat(
 
     if (editOpen) {
         state.openId?.let { id ->
-            AgentEditDialog("Edit agent", state.openName, state.openJob,
-                onConfirm = { n, j -> onEdit(id, n, j); editOpen = false }, onDismiss = { editOpen = false })
+            AgentEditDialog("Edit agent", state.openName, state.openJob, state.openReadPremium,
+                onConfirm = { n, j, rp -> onEdit(id, n, j, rp); editOpen = false }, onDismiss = { editOpen = false })
         }
     }
     if (deleteOpen) {
@@ -340,15 +341,16 @@ private fun AgentBubble(m: AgentMsg, agentName: String, onLongPress: () -> Unit)
 
 @Composable
 private fun AgentEditDialog(
-    title: String, initialName: String, initialJob: String,
-    onConfirm: (String, String) -> Unit, onDismiss: () -> Unit
+    title: String, initialName: String, initialJob: String, initialReadPremium: Boolean,
+    onConfirm: (String, String, Boolean) -> Unit, onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(initialName) }
     var job by remember { mutableStateOf(initialJob) }
+    var readPremium by remember { mutableStateOf(initialReadPremium) }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), job.trim()) },
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), job.trim(), readPremium) },
                 enabled = name.isNotBlank()) { Text("Save", color = W.Amber) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
@@ -377,6 +379,21 @@ private fun AgentEditDialog(
                         focusedTextColor = W.Text, unfocusedTextColor = W.Text
                     )
                 )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Also read my premium chats", color = W.Text, style = MaterialTheme.typography.bodyMedium)
+                        Text("Stays on your PC. This agent runs on your local model and never sends anything to the cloud.",
+                            color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = readPremium, onCheckedChange = { readPremium = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF1A1204), checkedTrackColor = W.Amber,
+                            uncheckedThumbColor = W.Muted, uncheckedTrackColor = W.SurfaceHi)
+                    )
+                }
             }
         },
         containerColor = W.Surface
