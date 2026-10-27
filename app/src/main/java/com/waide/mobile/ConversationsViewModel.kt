@@ -139,6 +139,46 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Change the Saved Chats password from Settings. Authenticates with the current
+     *  password first (so it works even when the tab is locked), then changes it. */
+    fun changePassword(current: String, newPin: String, onDone: (String?) -> Unit) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val info = ConversationsClient.auth(b, current)
+                ConversationsClient.changePin(b, info.token, current, newPin)
+            }
+            withContext(Dispatchers.Main) { onDone(r.exceptionOrNull()?.message) }
+        }
+    }
+
+    private var resetToken: String = ""
+
+    /** Forgot password: the master code grants a reset session (it never unlocks chats). */
+    fun requestReset(master: String, onDone: (String?) -> Unit) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.resetRequest(b, master) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { resetToken = it }
+                onDone(r.exceptionOrNull()?.message)
+            }
+        }
+    }
+
+    /** Set a new unlock password using the reset session from requestReset. */
+    fun completeReset(newPin: String, onDone: (String?) -> Unit) {
+        val b = base()
+        if (resetToken.isBlank()) { onDone("start the reset again"); return }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.resetComplete(b, resetToken, newPin) }
+            withContext(Dispatchers.Main) {
+                if (r.isSuccess) resetToken = ""
+                onDone(r.exceptionOrNull()?.message)
+            }
+        }
+    }
+
     fun refreshList() {
         if (token.isBlank()) return
         val b = base()

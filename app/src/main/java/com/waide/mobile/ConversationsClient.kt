@@ -26,7 +26,8 @@ data class LoginInfo(
     val token: String,
     val lastLogin: Double?,
     val failedAttempts: List<Double>,
-    val failedCount: Int
+    val failedCount: Int,
+    val mustChange: Boolean = false   // logged in with a one-time reset code; set a new pin now
 )
 /** A conversation's detail, including how much of it is folded into the summary. */
 data class ConvDetail(
@@ -78,7 +79,8 @@ object ConversationsClient {
             token = o.getString("token"),
             lastLogin = if (o.isNull("last_login")) null else o.optDouble("last_login"),
             failedAttempts = fa,
-            failedCount = o.optInt("failed_count", 0)
+            failedCount = o.optInt("failed_count", 0),
+            mustChange = o.optBoolean("must_change", false)
         )
     }
 
@@ -89,6 +91,26 @@ object ConversationsClient {
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
             it.write(JSONObject().put("old_pin", oldPin).put("new_pin", newPin).toString())
         }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Forgot password: the master code grants a reset token (it never unlocks chats).
+     *  Returns the reset token to use with resetComplete. */
+    fun resetRequest(base: String, master: String): String {
+        val c = open("$base/auth/reset-request", "POST", null)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("master", master).toString()) }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("token")
+    }
+
+    /** With a reset token, set a new unlock password (no old password needed). */
+    fun resetComplete(base: String, token: String, newPin: String) {
+        val c = open("$base/auth/reset-complete", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("new_pin", newPin).toString()) }
         if (c.responseCode != 200) fail(c)
     }
 
