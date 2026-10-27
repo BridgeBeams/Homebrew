@@ -95,11 +95,11 @@ fun ConversationsScreen(
     agentState: AgentState,
     onAgentRefresh: () -> Unit,
     onAgentOpen: (String) -> Unit,
-    onAgentNew: (String, String) -> Unit,
+    onAgentNew: (String, String, Boolean) -> Unit,
     onAgentClose: () -> Unit,
     onAgentSend: (String) -> Unit,
     onAgentStop: () -> Unit,
-    onAgentEdit: (String, String, String) -> Unit,
+    onAgentEdit: (String, String, String, Boolean) -> Unit,
     onAgentDelete: (String) -> Unit,
     onAgentDeleteMsg: (String) -> Unit,
     onAgentHide: (String) -> Unit,
@@ -160,7 +160,7 @@ fun ConversationsScreen(
 }
 
 @Composable
-private fun SectionTab(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+fun SectionTab(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(
         modifier
             .clip(RoundedCornerShape(6.dp))
