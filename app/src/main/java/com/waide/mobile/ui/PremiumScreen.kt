@@ -51,6 +51,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -615,7 +617,16 @@ private fun PremiumChat(
 private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     val who = if (isUser) "YOU" else m.model.substringAfterLast('/').ifBlank { "AI" }.uppercase()
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongPress)) {
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
+            onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
+            onClick = { menuOpen = false; onLongPress() })
+    }
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { menuOpen = true })) {
         Text(who, style = MaterialTheme.typography.labelSmall, color = if (isUser) W.Muted else W.Amber)
         Spacer(Modifier.height(5.dp))
         m.attachments.forEach { a ->
@@ -643,6 +654,7 @@ private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {}, onLo
                     else Modifier.padding(start = 2.dp)
                 ))
         }
+    }
     }
 }
 

@@ -48,6 +48,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -721,9 +723,17 @@ private fun ImageZoomDialog(b64: String, onDismiss: () -> Unit) {
 @Composable
 private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
-    // Long-press a message to delete just it. (No text-selection wrapper here, since
-    // it would swallow the long-press.)
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongPress)) {
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // Long-press a message for Copy / Delete.
+    Box {
+    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
+            onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
+            onClick = { menuOpen = false; onLongPress() })
+    }
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { menuOpen = true })) {
         Text(if (isUser) "YOU" else "WAIDE", style = MaterialTheme.typography.labelSmall,
             color = if (isUser) W.Muted else W.Amber)
         Spacer(Modifier.height(5.dp))
@@ -754,6 +764,7 @@ private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {}, onLongPres
                 )
             )
         }
+    }
     }
 }
 

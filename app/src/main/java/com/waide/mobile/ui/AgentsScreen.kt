@@ -25,6 +25,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -324,7 +326,16 @@ private fun AgentChat(
 @Composable
 private fun AgentBubble(m: AgentMsg, agentName: String, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongPress)) {
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
+            onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
+            onClick = { menuOpen = false; onLongPress() })
+    }
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { menuOpen = true })) {
         Text(if (isUser) "YOU" else agentName.uppercase(), style = MaterialTheme.typography.labelSmall,
             color = if (isUser) W.Muted else W.Amber)
         Spacer(Modifier.height(5.dp))
@@ -336,6 +347,7 @@ private fun AgentBubble(m: AgentMsg, agentName: String, onLongPress: () -> Unit)
                 else Modifier.padding(start = 2.dp)
             )
         )
+    }
     }
 }
 
