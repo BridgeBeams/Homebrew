@@ -1,5 +1,6 @@
 package com.waide.mobile.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -88,6 +89,7 @@ fun SettingsScreen(
     // The full-screen server-models manager (search, pull, delete, pick answering model
     // and image reader). Swaps in over Settings, same pattern the Server tab used before.
     if (managingModels) {
+        BackHandler { managingModels = false }   // Android back returns to Settings
         ServerModelsScreen(
             state = serverState,
             onBack = { managingModels = false },
@@ -107,6 +109,7 @@ fun SettingsScreen(
 
     // The on-phone model picker (scans Downloads for .gguf). Same swap-in pattern.
     if (managingLocal) {
+        BackHandler { managingLocal = false }   // Android back returns to Settings
         ModelsScreen(
             models = localModels,
             loadedName = loadedModelName,
