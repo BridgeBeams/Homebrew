@@ -63,6 +63,7 @@ data class AgentState(
     val openId: String? = null,
     val openName: String = "",
     val openJob: String = "",
+    val openReadPremium: Boolean = false,
     val messages: List<AgentMsg> = emptyList(),
     val streaming: String? = null,
     val busy: Boolean = false,
@@ -515,7 +516,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 r.onSuccess { d ->
                     _agentState.value = _agentState.value.copy(
-                        openId = id, openName = d.name, openJob = d.job, messages = d.messages, busy = false)
+                        openId = id, openName = d.name, openJob = d.job, openReadPremium = d.readPremium,
+                        messages = d.messages, busy = false)
                 }.onFailure { _agentState.value = _agentState.value.copy(busy = false, error = it.message) }
             }
         }
@@ -527,7 +529,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             val r = runCatching { AgentsClient.get(b, token, id) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { d -> _agentState.value = _agentState.value.copy(
-                    openName = d.name, openJob = d.job, messages = d.messages) }
+                    openName = d.name, openJob = d.job, openReadPremium = d.readPremium, messages = d.messages) }
             }
         }
     }
@@ -538,27 +540,27 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         refreshAgents()
     }
 
-    fun createAgent(name: String, job: String) {
+    fun createAgent(name: String, job: String, readPremium: Boolean) {
         val b = base()
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { AgentsClient.create(b, token, name, job) }
+            val r = runCatching { AgentsClient.create(b, token, name, job, readPremium) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _agentState.value = _agentState.value.copy(
-                        openId = id, openName = name, openJob = job, messages = emptyList(),
-                        streaming = null, busy = false, error = null)
+                        openId = id, openName = name, openJob = job, openReadPremium = readPremium,
+                        messages = emptyList(), streaming = null, busy = false, error = null)
                 }.onFailure { _agentState.value = _agentState.value.copy(error = it.message) }
             }
         }
     }
 
-    fun editAgent(id: String, name: String, job: String) {
+    fun editAgent(id: String, name: String, job: String, readPremium: Boolean) {
         val b = base()
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { AgentsClient.edit(b, token, id, name, job) }
+            runCatching { AgentsClient.edit(b, token, id, name, job, readPremium) }
             withContext(Dispatchers.Main) {
                 if (_agentState.value.openId == id)
-                    _agentState.value = _agentState.value.copy(openName = name, openJob = job)
+                    _agentState.value = _agentState.value.copy(openName = name, openJob = job, openReadPremium = readPremium)
                 refreshAgents()
             }
         }

@@ -15,10 +15,14 @@ import java.net.URL
  */
 data class AgentSummary(
     val id: String, val name: String, val job: String,
-    val updated: Double, val count: Int, val hidden: Boolean = false
+    val updated: Double, val count: Int, val hidden: Boolean = false,
+    val readPremium: Boolean = false
 )
 data class AgentMsg(val id: String, val role: String, val text: String)
-data class AgentDetail(val name: String, val job: String, val messages: List<AgentMsg>)
+data class AgentDetail(
+    val name: String, val job: String, val messages: List<AgentMsg>,
+    val readPremium: Boolean = false
+)
 
 object AgentsClient {
 
@@ -44,16 +48,17 @@ object AgentsClient {
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
             AgentSummary(o.getString("id"), o.optString("name", "Agent"), o.optString("job", ""),
-                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false))
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false),
+                o.optBoolean("read_premium", false))
         }
     }
 
-    fun create(base: String, token: String, name: String, job: String): String {
+    fun create(base: String, token: String, name: String, job: String, readPremium: Boolean): String {
         val c = open("$base/agents", "POST", token)
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().put("name", name).put("job", job).toString())
+            it.write(JSONObject().put("name", name).put("job", job).put("read_premium", readPremium).toString())
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
@@ -70,15 +75,16 @@ object AgentsClient {
                 msgs.add(AgentMsg(m.optString("id"), m.optString("role"), m.optString("text")))
             }
         }
-        return AgentDetail(o.optString("name", "Agent"), o.optString("job", ""), msgs)
+        return AgentDetail(o.optString("name", "Agent"), o.optString("job", ""), msgs,
+            o.optBoolean("read_premium", false))
     }
 
-    fun edit(base: String, token: String, id: String, name: String, job: String) {
+    fun edit(base: String, token: String, id: String, name: String, job: String, readPremium: Boolean) {
         val c = open("$base/agents/$id/edit", "POST", token)
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().put("name", name).put("job", job).toString())
+            it.write(JSONObject().put("name", name).put("job", job).put("read_premium", readPremium).toString())
         }
         if (c.responseCode != 200) fail(c)
     }
