@@ -302,6 +302,7 @@ object ServerClient {
         model: String,
         messages: List<Message>,
         numCtx: Int,
+        onImage: (String) -> Unit = {},
         onToken: (String) -> Unit
     ): String {
         val b = normalize(base)
@@ -337,8 +338,16 @@ object ServerClient {
                     val line = reader.readLine() ?: break
                     if (line.isBlank()) continue
                     val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
-                    o.optJSONObject("message")?.optString("content")?.let {
+                    val msg = o.optJSONObject("message")
+                    msg?.optString("content")?.let {
                         if (it.isNotEmpty()) { sb.append(it); onToken(it) }
+                    }
+                    // Image-capable local models return images as base64 on the message.
+                    msg?.optJSONArray("images")?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            val b64 = arr.optString(i)
+                            if (b64.isNotBlank()) onImage(b64)
+                        }
                     }
                     if (o.optBoolean("done", false)) break
                 }

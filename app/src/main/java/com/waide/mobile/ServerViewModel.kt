@@ -384,13 +384,16 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             val toSend = trimToBudget(toModel(base + withNote), budgetChars)
 
             var acc = ""
-            val reply = ServerClient.chatStream(serverUrl(), _state.value.selectedModel, toSend, numCtx) { piece ->
+            var genImage: String? = null
+            val reply = ServerClient.chatStream(serverUrl(), _state.value.selectedModel, toSend, numCtx,
+                onImage = { if (genImage == null) genImage = it }) { piece ->
                 acc += piece
                 _state.value = _state.value.copy(streaming = acc)
             }
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
-                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }),
+                    messages = _state.value.messages + Message("assistant",
+                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage),
                     streaming = null, busy = false
                 )
             }
@@ -433,13 +436,16 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
         genJob = viewModelScope.launch(Dispatchers.IO) {
           try {
             var acc = ""
-            val reply = ServerClient.chatStream(serverUrl(), model, toSend, numCtx) { piece ->
+            var genImage: String? = null
+            val reply = ServerClient.chatStream(serverUrl(), model, toSend, numCtx,
+                onImage = { if (genImage == null) genImage = it }) { piece ->
                 acc += piece
                 _state.value = _state.value.copy(streaming = acc)
             }
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
-                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }),
+                    messages = _state.value.messages + Message("assistant",
+                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage),
                     streaming = null, busy = false
                 )
             }
