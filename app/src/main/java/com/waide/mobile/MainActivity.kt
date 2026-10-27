@@ -1,6 +1,7 @@
 package com.waide.mobile
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -8,10 +9,13 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -136,6 +140,33 @@ private fun Shell(
         if (tab != Tab.Convos) cvm.lock()
         if (tab == Tab.Chat) vm.ensureLocalModelLoaded()
         if (tab == Tab.Premium) { pvm.refreshStatus(); pvm.refreshAgents() }
+    }
+
+    // Android back handling. First, back out of an open conversation or agent (one layer
+    // up to its list) instead of leaving the app. At the top level, a second back press
+    // within two seconds is needed to actually exit.
+    val context = LocalContext.current
+    var lastBackMs by remember { mutableStateOf(0L) }
+    val hasOpenDetail = when (tab) {
+        Tab.Premium -> premiumState.openId != null || premiumAgentState.openId != null
+        Tab.Convos -> convState.openId != null || agentState.openId != null
+        else -> false
+    }
+    BackHandler(enabled = hasOpenDetail) {
+        when (tab) {
+            Tab.Premium -> if (premiumState.openId != null) pvm.closeConversation() else pvm.closeAgent()
+            Tab.Convos -> if (convState.openId != null) cvm.closeConversation() else cvm.closeAgent()
+            else -> {}
+        }
+    }
+    BackHandler(enabled = !hasOpenDetail) {
+        val now = System.currentTimeMillis()
+        if (now - lastBackMs < 2000) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackMs = now
+            Toast.makeText(context, "Tap back again to exit", Toast.LENGTH_SHORT).show()
+        }
     }
 
     Scaffold(
