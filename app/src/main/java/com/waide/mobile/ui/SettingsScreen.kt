@@ -425,10 +425,10 @@ fun SettingsScreen(
         }
         if (changePwDialog) {
             ChangePasswordDialog(
-                onSave = { current, newPin ->
+                onSave = { current, newPin, done ->
                     onChangePassword(current, newPin) { err ->
-                        pwMsg = err ?: "Password changed."
-                        if (err == null) changePwDialog = false
+                        if (err == null) pwMsg = "Password changed."
+                        done(err)
                     }
                 },
                 onRequestReset = onRequestReset,
@@ -595,27 +595,40 @@ private fun PinField(label: String, value: String, onChange: (String) -> Unit) {
 
 @Composable
 private fun ChangePasswordDialog(
-    onSave: (String, String) -> Unit,
+    onSave: (String, String, (String?) -> Unit) -> Unit,
     onRequestReset: (String, (String?) -> Unit) -> Unit,
     onCompleteReset: (String, (String?) -> Unit) -> Unit,
     onCancel: () -> Unit
 ) {
     var cur by remember { mutableStateOf("") }
     var neu by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf<String?>(null) }
     var forgotOpen by remember { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         confirmButton = {
-            TextButton(onClick = { if (cur.length == 6 && neu.length == 6) onSave(cur, neu) },
-                enabled = cur.length == 6 && neu.length == 6) { Text("Save", color = W.Amber) }
+            TextButton(
+                onClick = {
+                    if (cur.length == 6 && neu.length == 6 && !busy) {
+                        busy = true; err = null
+                        onSave(cur, neu) { e -> busy = false; err = e; if (e == null) onCancel() }
+                    }
+                },
+                enabled = cur.length == 6 && neu.length == 6 && !busy
+            ) { Text(if (busy) "Saving..." else "Save", color = W.Amber) }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", color = W.Muted) } },
+        dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel", color = W.Muted) } },
         title = { Text("Change password", color = W.Text) },
         text = {
             Column {
                 PinField("Current password", cur) { cur = it }
                 Spacer(Modifier.height(8.dp))
                 PinField("New password (6 digits)", neu) { neu = it }
+                err?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = W.Danger, style = MaterialTheme.typography.labelSmall)
+                }
                 Spacer(Modifier.height(6.dp))
                 TextButton(onClick = { forgotOpen = true }, contentPadding = PaddingValues(0.dp)) {
                     Text("Forgot password", color = W.Amber, style = MaterialTheme.typography.labelMedium)
