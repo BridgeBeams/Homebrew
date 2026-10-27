@@ -28,11 +28,13 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
@@ -61,6 +63,7 @@ import com.waide.mobile.ConvFile
 import com.waide.mobile.PremiumAttach
 import com.waide.mobile.PremiumModel
 import com.waide.mobile.PremiumMsg
+import com.waide.mobile.PremiumSearchHit
 import com.waide.mobile.PremiumState
 import com.waide.mobile.PremiumSummary
 import java.text.SimpleDateFormat
@@ -99,12 +102,15 @@ fun PremiumScreen(
     onDownloadFile: (String) -> Unit,
     onDismissFilesMsg: () -> Unit,
     onDismissCompacting: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (state.openId == null) {
         PremiumList(state, onRefresh, onNew, onOpen, onRename, onDeleteConv,
             onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide,
-            onOpenAskAll, onStartAskAll, onDismissAskAll, onToggleFavorite, onRefreshModels, modifier)
+            onOpenAskAll, onStartAskAll, onDismissAskAll, onToggleFavorite, onRefreshModels,
+            onSearch, onClearSearch, modifier)
     } else {
         PremiumChat(state, onClose, onSend, onStop, onRename, onDeleteConv, onDeleteMsg,
             onImagePicked, onFilePicked, onClearAttachment, onSetConvModel, onRefreshModels,
@@ -130,11 +136,14 @@ private fun PremiumList(
     onDismissAskAll: () -> Unit,
     onToggleFavorite: (String) -> Unit,
     onRefreshModels: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearSearch: () -> Unit,
     modifier: Modifier
 ) {
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renameFor by remember { mutableStateOf<PremiumSummary?>(null) }
     var deleteFor by remember { mutableStateOf<PremiumSummary?>(null) }
+    val searchMode = state.query.isNotBlank()
 
     Column(modifier.fillMaxSize()) {
         Row(
@@ -167,6 +176,27 @@ private fun PremiumList(
         }
         HorizontalDivider(color = W.Line)
 
+        // keyword search box
+        OutlinedTextField(
+            value = state.query, onValueChange = onSearch,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Search premium chats", color = W.Muted) }, singleLine = true,
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = W.Muted) },
+            trailingIcon = {
+                if (searchMode) {
+                    if (state.searching) CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
+                    else IconButton(onClick = onClearSearch) { Icon(Icons.Filled.Close, contentDescription = "Clear", tint = W.Muted) }
+                }
+            },
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                focusedTextColor = W.Text, unfocusedTextColor = W.Text
+            )
+        )
+        HorizontalDivider(color = W.Line)
+
         if (state.checkedKey && !state.hasKey) {
             Text("Add your OpenRouter key in Settings > Premium AI to start.",
                 color = W.Amber, style = MaterialTheme.typography.bodyMedium,
@@ -177,7 +207,42 @@ private fun PremiumList(
                 modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(12.dp))
         }
 
-        if (state.conversations.isEmpty()) {
+        if (searchMode) {
+            if (state.results.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(if (state.searching) "Searching..." else "No matches for \"${state.query}\".",
+                        color = W.Muted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 40.dp))
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    items(state.results) { h ->
+                        Column(
+                            Modifier.fillMaxWidth().clickable { onOpen(h.id) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (h.mode == "multi") {
+                                    Icon(Icons.Filled.ViewColumn, contentDescription = "Ask all",
+                                        tint = W.Amber, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                }
+                                Text(h.title, color = W.Text, style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (h.snippet.isNotBlank()) {
+                                Spacer(Modifier.height(3.dp))
+                                Text(h.snippet, color = W.Muted, style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Spacer(Modifier.height(3.dp))
+                            Text("${fmtWhen(h.updated)}  ·  ${h.count} messages",
+                                color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                        }
+                        HorizontalDivider(color = W.Line)
+                    }
+                }
+            }
+        } else if (state.conversations.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
                     if (state.loadingList) "Loading..."
