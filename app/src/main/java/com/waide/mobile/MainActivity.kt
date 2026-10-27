@@ -15,6 +15,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Lock
@@ -31,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.waide.mobile.ui.ChatScreen
 import com.waide.mobile.ui.ConversationsScreen
+import com.waide.mobile.ui.PremiumScreen
 import com.waide.mobile.ui.ServerScreen
 import com.waide.mobile.ui.SettingsScreen
 import com.waide.mobile.ui.W
@@ -41,12 +43,13 @@ class MainActivity : ComponentActivity() {
     private val vm: ChatViewModel by viewModels()
     private val svm: ServerViewModel by viewModels()
     private val cvm: ConversationsViewModel by viewModels()
+    private val pvm: PremiumViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         maybeAskNotifications()
-        setContent { WaideTheme { Shell(vm, svm, cvm, ::hasAllFiles, ::requestAllFiles) } }
+        setContent { WaideTheme { Shell(vm, svm, cvm, pvm, ::hasAllFiles, ::requestAllFiles) } }
     }
 
     // The "working" notification needs this on Android 13+. If denied, generation
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Tab(val label: String, val icon: ImageVector) {
+    Premium("Premium AI", Icons.Filled.AutoAwesome),
     Chat("Local Chat", Icons.Filled.Chat),
     Server("Server Chat", Icons.Filled.Cloud),
     Convos("Saved Chats", Icons.Filled.Lock),
@@ -86,6 +90,7 @@ private fun Shell(
     vm: ChatViewModel,
     svm: ServerViewModel,
     cvm: ConversationsViewModel,
+    pvm: PremiumViewModel,
     hasAllFiles: () -> Boolean,
     requestAllFiles: () -> Unit
 ) {
@@ -99,6 +104,7 @@ private fun Shell(
     val serverState by svm.state.collectAsState()
     val convState by cvm.state.collectAsState()
     val agentState by cvm.agentState.collectAsState()
+    val premiumState by pvm.state.collectAsState()
 
     // Re-check permission and rescan whenever the app comes back to the front,
     // which is exactly when a download has just finished or access was granted.
@@ -124,6 +130,7 @@ private fun Shell(
     LaunchedEffect(tab) {
         if (tab != Tab.Convos) cvm.lock()
         if (tab == Tab.Chat) vm.ensureLocalModelLoaded()
+        if (tab == Tab.Premium) pvm.refreshStatus()
     }
 
     Scaffold(
@@ -172,6 +179,27 @@ private fun Shell(
     ) { pad ->
         Box(Modifier.padding(pad).consumeWindowInsets(pad).background(W.Bg)) {
             when (tab) {
+                Tab.Premium -> PremiumScreen(
+                    state = premiumState,
+                    onRefresh = { pvm.refreshStatus() },
+                    onNew = { pvm.newConversation() },
+                    onOpen = { pvm.openConversation(it) },
+                    onClose = { pvm.closeConversation() },
+                    onSend = { pvm.send(it) },
+                    onStop = { pvm.stopGeneration() },
+                    onRename = { id, t -> pvm.renameConversation(id, t) },
+                    onDeleteConv = { pvm.deleteConversation(it) },
+                    onDeleteMsg = { pvm.deleteMessage(it) },
+                    onHide = { pvm.hideConversation(it) },
+                    onRequestUnhide = { pvm.requestUnhide(it) },
+                    onSubmitUnhide = { pvm.submitUnhide(it) },
+                    onCancelUnhide = { pvm.cancelUnhide() },
+                    onImagePicked = { pvm.attachImage(it) },
+                    onFilePicked = { pvm.attachFile(it) },
+                    onClearAttachment = { pvm.clearAttachment(it) },
+                    onSetConvModel = { pvm.setOpenModel(it) },
+                    onRefreshModels = { pvm.refreshModels() }
+                )
                 Tab.Chat -> ChatScreen(
                     state = state,
                     onSend = { vm.send(it) },
@@ -245,6 +273,11 @@ private fun Shell(
                     onOpenQuants = { svm.openQuants(it) },
                     onCloseQuants = { svm.closeQuants() },
                     onPullHf = { repo, tag -> svm.pullHf(repo, tag) },
+                    premiumState = premiumState,
+                    onSetOpenRouterKey = { pin, key, cb -> pvm.setKey(pin, key, cb) },
+                    onRefreshPremiumModels = { pvm.refreshModels() },
+                    onSetDefaultPremiumModel = { pvm.setDefaultModel(it) },
+                    onUnhideAllPremium = { pin, cb -> pvm.unhideAll(pin, cb) },
                     localModels = models,
                     loadedModelName = state.modelName,
                     modelLoading = state.modelLoading,

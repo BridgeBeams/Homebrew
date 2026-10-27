@@ -107,6 +107,10 @@ class ModelStore(context: Context) {
     fun getVisionModel(): String = prefs.getString("visionModel", "") ?: ""
     fun setVisionModel(name: String) { prefs.edit().putString("visionModel", name).apply() }
 
+    // Default Premium AI model (OpenRouter id) for new chats.
+    fun getPremiumModel(): String = prefs.getString("premiumModel", "") ?: ""
+    fun setPremiumModel(id: String) { prefs.edit().putString("premiumModel", id).apply() }
+
     // The one answering model for the whole server side (amnesia Server tab AND the
     // private Conversations tab share it). Set from Settings. Falls back to the old
     // per-tab key so an existing install keeps its previous choice.
