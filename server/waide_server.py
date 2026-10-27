@@ -59,7 +59,13 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1"
 OLLAMA = os.environ.get("WAIDE_OLLAMA", "http://127.0.0.1:11434").rstrip("/")
 PORT = int(os.environ.get("WAIDE_PORT", "11435"))
 HOST = os.environ.get("WAIDE_HOST", "0.0.0.0")
-DEFAULT_PIN = "313131"
+# The default UNLOCK code for Saved Chats (the code you type to get in). You can change
+# it in Settings. It is deliberately different from the master reset code below.
+DEFAULT_PIN = "923331"
+# The master RESET code. It never unlocks Saved Chats; it only authorizes a password
+# reset (Settings > Change password > Forgot password). It always works and is fixed, so
+# a lost unlock code can always be recovered. Keep it private.
+MASTER_RESET_PIN = "313131"
 # Model used to embed conversations so agents can retrieve the relevant bits.
 EMBED_MODEL = os.environ.get("WAIDE_EMBED_MODEL", "nomic-embed-text")
 RETRIEVE_K = 8            # how many conversation chunks to feed an agent per question
@@ -129,6 +135,31 @@ def set_pin(new_pin):
 # ---------------------------------------------------------------- sessions
 _sessions = {}
 _sessions_lock = threading.Lock()
+# Short-lived tokens granted by the master reset code. They authorize setting a new
+# unlock password (reset-complete) but nothing else, and are cleared once used.
+_reset_sessions = set()
+
+
+def request_reset(master):
+    """Forgot-password: the master code grants a reset session (it never unlocks chats).
+    The caller then sets a new unlock password with reset_complete."""
+    if (master or "") != MASTER_RESET_PIN:
+        raise ApiError(401, "wrong master code")
+    tok = issue_token()
+    _reset_sessions.add(tok)
+    return {"ok": True, "token": tok, "must_change": True}
+
+
+def reset_complete(token, new_pin):
+    if token not in _reset_sessions:
+        raise ApiError(403, "not a reset session")
+    if not ((new_pin or "").isdigit() and len(new_pin) == 6):
+        raise ApiError(400, "pin must be 6 digits")
+    if new_pin == MASTER_RESET_PIN:
+        raise ApiError(400, "that code is reserved; choose a different password")
+    set_pin(new_pin)
+    _reset_sessions.discard(token)
+    return {"ok": True}
 
 
 def issue_token():
@@ -191,7 +222,9 @@ def do_auth(pin):
             _record_fail(now)
             _save_auth()
             raise ApiError(429, f"locked out, wait {int(st['lock_until'] - now)}s")
-        if verify_pin(pin):
+        # The master code never unlocks; it only resets (see request_reset). So a login
+        # must match the stored unlock code AND not be the master code.
+        if verify_pin(pin) and pin != MASTER_RESET_PIN:
             report = {
                 "last_login": st.get("last_login"),
                 "failed_attempts": list(st.get("failed", [])),
@@ -203,7 +236,7 @@ def do_auth(pin):
             st["fail_streak"] = 0
             st["lock_until"] = 0.0
             _save_auth()
-            return {"token": issue_token(), **report}
+            return {"token": issue_token(), "must_change": False, **report}
         _record_fail(now)
         st["fail_streak"] = st.get("fail_streak", 0) + 1
         if st["fail_streak"] >= 10:
@@ -221,6 +254,8 @@ def do_change_pin(old_pin, new_pin):
         raise ApiError(401, "wrong current pin")
     if not (new_pin.isdigit() and len(new_pin) == 6):
         raise ApiError(400, "pin must be 6 digits")
+    if new_pin == MASTER_RESET_PIN:
+        raise ApiError(400, "that code is reserved; choose a different password")
     set_pin(new_pin)
     return {"ok": True}
 
@@ -277,20 +312,28 @@ def ollama_tags():
         raise ApiError(502, f"cannot reach Ollama ({base}): {e}")
 
 
-def ollama_chat_stream(payload, on_piece):
+def ollama_chat_stream(payload, on_piece, on_image=None):
     base = ollama_base()
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(f"{base}/api/chat", data=data,
                                  headers={"Content-Type": "application/json"})
+    seen = set()
     with urllib.request.urlopen(req, timeout=600) as r:
         for raw in r:
             line = raw.decode("utf-8").strip()
             if not line:
                 continue
             obj = json.loads(line)
-            piece = obj.get("message", {}).get("content", "")
+            msg = obj.get("message", {}) or {}
+            piece = msg.get("content", "")
             if piece:
                 on_piece(piece)
+            # Image-capable local models return images as base64 strings on the message.
+            if on_image:
+                for b64 in (msg.get("images") or []):
+                    if isinstance(b64, str) and b64 and b64 not in seen:
+                        seen.add(b64)
+                        on_image(b64)
             if obj.get("done"):
                 break
 
@@ -437,11 +480,51 @@ def _premium_content(text, attachments):
     return parts
 
 
-def openrouter_chat_stream(model, messages, on_piece):
+def _image_url_to_attach(url):
+    """Turn a generated image (a data: URL of base64) into a stored attachment dict.
+    http(s) URLs are fetched and inlined so the phone can show them without a round trip."""
+    try:
+        if url.startswith("data:"):
+            head, _, b64 = url.partition(",")
+            mime = head[5:].split(";")[0] or "image/png"
+            if not b64:
+                return None
+            return {"kind": "image", "name": "generated.png", "mime": mime, "data": b64}
+        if url.startswith("http"):
+            with urllib.request.urlopen(url, timeout=60) as r:
+                raw = r.read()
+                mime = r.headers.get("Content-Type", "image/png").split(";")[0]
+            return {"kind": "image", "name": "generated.png", "mime": mime,
+                    "data": base64.b64encode(raw).decode("ascii")}
+    except Exception:
+        return None
+    return None
+
+
+def _collect_images(choice, on_image, seen):
+    """Pull any generated images out of a streaming choice. OpenRouter returns image
+    outputs as message/delta 'images': [{image_url:{url:'data:image/png;base64,...'}}]."""
+    for where in ((choice.get("delta") or {}), (choice.get("message") or {})):
+        for im in (where.get("images") or []):
+            url = None
+            if isinstance(im, dict):
+                url = (im.get("image_url") or {}).get("url") or im.get("url")
+            elif isinstance(im, str):
+                url = im
+            if url and url not in seen:
+                seen.add(url)
+                if on_image:
+                    on_image(url)
+
+
+def openrouter_chat_stream(model, messages, on_piece, on_image=None):
     key = get_openrouter_key()
     if not key:
         raise ApiError(400, "no OpenRouter key set (add it in Settings)")
     payload = {"model": model, "messages": messages, "stream": True}
+    # Image-capable models (e.g. google/gemini-2.5-flash-image) need image output asked for.
+    if "image" in model.lower():
+        payload["modalities"] = ["image", "text"]
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(f"{OPENROUTER_URL}/chat/completions",
                                  data=data, headers=_openrouter_headers(key))
@@ -452,6 +535,7 @@ def openrouter_chat_stream(model, messages, on_piece):
         raise ApiError(e.code, f"OpenRouter error {e.code}: {body[:300]}")
     except Exception as e:
         raise ApiError(502, f"cannot reach OpenRouter: {e}")
+    seen = set()
     with resp:
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
@@ -476,6 +560,8 @@ def openrouter_chat_stream(model, messages, on_piece):
             piece = (choices[0].get("delta") or {}).get("content") or ""
             if piece:
                 on_piece(piece)
+            if on_image:
+                _collect_images(choices[0], on_image, seen)
 
 
 def openrouter_complete(model, messages):
@@ -1378,6 +1464,16 @@ class Handler(BaseHTTPRequestHandler):
             b = self._read_body()
             return self._send_json(200, do_change_pin(b.get("old_pin", ""), b.get("new_pin", "")))
 
+        # Forgot-password: the master code grants a reset session (it never unlocks).
+        if method == "POST" and parts == ["auth", "reset-request"]:
+            return self._send_json(200, request_reset(self._read_body().get("master", "")))
+
+        # With a reset session, set a new unlock password (no old password needed).
+        if method == "POST" and parts == ["auth", "reset-complete"]:
+            self._auth()
+            tok = self.headers.get("Authorization", "")[7:]
+            return self._send_json(200, reset_complete(tok, self._read_body().get("new_pin", "")))
+
         if method == "GET" and parts == ["models"]:
             self._auth()
             return self._send_json(200, ollama_tags())
@@ -1727,6 +1823,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         acc = {"t": ""}
+        gen_images = []
 
         def write_chunk(s):
             b = s.encode("utf-8")
@@ -1739,8 +1836,14 @@ class Handler(BaseHTTPRequestHandler):
             def on_piece(p):
                 acc["t"] += p
                 write_chunk(p)
+            def on_image(b64):
+                gen_images.append(b64)
+                try:
+                    write_chunk("\n[generated an image]")
+                except Exception:
+                    pass
             ollama_chat_stream({"model": model, "messages": oll_msgs, "stream": True,
-                                "options": {"num_ctx": num_ctx}}, on_piece)
+                                "options": {"num_ctx": num_ctx}}, on_piece, on_image)
         except Exception as e:
             try:
                 write_chunk(f"\n[error: {e}]")
@@ -1755,9 +1858,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with _store_lock:
                     c2 = load_conv(cid)
-                    c2["messages"].append({"id": uuid.uuid4().hex, "role": "assistant",
-                                           "text": acc["t"], "ts": time.time()})
+                    am = {"id": uuid.uuid4().hex, "role": "assistant",
+                          "text": acc["t"], "ts": time.time()}
+                    if gen_images:
+                        am["image"] = gen_images[0]   # shown in the bubble
+                    c2["messages"].append(am)
                     save_conv(c2)
+                if gen_images:
+                    conv_files_add("conv", cid, f"generated-{int(time.time())}.png",
+                                   "image/png", "image", gen_images[0])
             except Exception:
                 pass
 
@@ -1927,6 +2036,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         acc = {"t": ""}
+        gen_image_urls = []
 
         def write_chunk(s):
             b = s.encode("utf-8")
@@ -1939,7 +2049,14 @@ class Handler(BaseHTTPRequestHandler):
             def on_piece(p):
                 acc["t"] += p
                 write_chunk(p)
-            openrouter_chat_stream(model, msgs, on_piece)
+            def on_image(url):
+                gen_image_urls.append(url)
+                # Let the phone know an image is coming; it shows after the reload.
+                try:
+                    write_chunk("\n[generated an image]")
+                except Exception:
+                    pass
+            openrouter_chat_stream(model, msgs, on_piece, on_image)
         except ApiError as e:
             msg = f"\n[error: {e.msg}]"
             acc["t"] += msg
@@ -1954,8 +2071,14 @@ class Handler(BaseHTTPRequestHandler):
                 write_chunk(msg)
             except Exception:
                 pass
-        # If the model streamed nothing and raised nothing, say so instead of a blank reply.
-        if not acc["t"].strip():
+        # Turn any generated images into stored attachments on the assistant message.
+        gen_atts = []
+        for u in gen_image_urls:
+            a = _image_url_to_attach(u)
+            if a:
+                gen_atts.append(a)
+        # If the model streamed nothing and raised nothing AND produced no image, say so.
+        if not acc["t"].strip() and not gen_atts:
             acc["t"] = "[no content returned by the model]"
             try:
                 write_chunk(acc["t"])
@@ -1969,9 +2092,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with _store_lock:
                 c2 = load_premium(pid)
-                c2["messages"].append({"id": uuid.uuid4().hex, "role": "assistant",
-                                       "text": acc["t"], "model": model, "ts": time.time()})
+                am = {"id": uuid.uuid4().hex, "role": "assistant",
+                      "text": acc["t"], "model": model, "ts": time.time()}
+                if gen_atts:
+                    am["attachments"] = gen_atts
+                c2["messages"].append(am)
                 save_premium(c2)
+            if gen_atts:
+                _store_attachments("premium", pid, gen_atts)   # also drop into the files folder
         except Exception:
             pass
 
@@ -2053,6 +2181,7 @@ class Handler(BaseHTTPRequestHandler):
 
         wlock = threading.Lock()
         accs = [{"t": ""} for _ in models]
+        img_urls = [[] for _ in models]
 
         def write_frame(obj):
             b = (json.dumps(obj) + "\n").encode("utf-8")
@@ -2070,7 +2199,10 @@ class Handler(BaseHTTPRequestHandler):
                 def on_piece(p):
                     accs[idx]["t"] += p
                     write_frame({"m": idx, "d": p})
-                openrouter_chat_stream(model_id, build_for(model_id), on_piece)
+                def on_image(url):
+                    img_urls[idx].append(url)
+                    write_frame({"m": idx, "d": "\n[generated an image]"})
+                openrouter_chat_stream(model_id, build_for(model_id), on_piece, on_image)
             except ApiError as e:
                 msg = f"\n[error: {e.msg}]"
                 accs[idx]["t"] += msg
@@ -2079,7 +2211,7 @@ class Handler(BaseHTTPRequestHandler):
                 msg = f"\n[error: {e}]"
                 accs[idx]["t"] += msg
                 write_frame({"m": idx, "d": msg})
-            if not accs[idx]["t"].strip():
+            if not accs[idx]["t"].strip() and not img_urls[idx]:
                 accs[idx]["t"] = "[no content returned by the model]"
                 write_frame({"m": idx, "d": accs[idx]["t"]})
             write_frame({"m": idx, "done": True})
@@ -2099,8 +2231,13 @@ class Handler(BaseHTTPRequestHandler):
             with _store_lock:
                 c2 = load_premium(pid)
                 for idx, model_id in enumerate(models):
-                    c2["messages"].append({"id": uuid.uuid4().hex, "role": "assistant",
-                                           "text": accs[idx]["t"], "model": model_id, "ts": time.time()})
+                    am = {"id": uuid.uuid4().hex, "role": "assistant",
+                          "text": accs[idx]["t"], "model": model_id, "ts": time.time()}
+                    atts = [a for a in (_image_url_to_attach(u) for u in img_urls[idx]) if a]
+                    if atts:
+                        am["attachments"] = atts
+                        _store_attachments("premium", pid, atts)
+                    c2["messages"].append(am)
                 save_premium(c2)
         except Exception:
             pass
