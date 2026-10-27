@@ -30,6 +30,12 @@ data class PremiumMsg(
     val id: String, val role: String, val text: String,
     val model: String = "", val attachments: List<PremiumAttach> = emptyList()
 )
+/** A keyword-search hit over premium conversations. */
+data class PremiumSearchHit(
+    val id: String, val title: String, val snippet: String,
+    val updated: Double, val count: Int,
+    val mode: String = "single", val models: List<String> = emptyList()
+)
 data class PremiumDetail(
     val title: String, val model: String, val messages: List<PremiumMsg>,
     val mode: String = "single", val models: List<String> = emptyList(),
@@ -115,6 +121,19 @@ object PremiumClient {
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    /** Keyword search over premium conversations (hidden ones excluded server-side). */
+    fun search(base: String, q: String): List<PremiumSearchHit> {
+        val enc = java.net.URLEncoder.encode(q, "UTF-8")
+        val c = open("$base/premium/conversations/search?q=$enc", "GET")
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            PremiumSearchHit(o.getString("id"), o.optString("title", "Untitled"), o.optString("snippet", ""),
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optString("mode", "single"), strList(o, "models"))
+        }
     }
 
     /** Create an Ask-all (multi-model) conversation. */

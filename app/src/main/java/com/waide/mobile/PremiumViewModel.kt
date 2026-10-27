@@ -28,6 +28,10 @@ data class PremiumState(
     // conversations
     val conversations: List<PremiumSummary> = emptyList(),
     val loadingList: Boolean = false,
+    // keyword search
+    val query: String = "",
+    val searching: Boolean = false,
+    val results: List<PremiumSearchHit> = emptyList(),
     val openId: String? = null,
     val openTitle: String = "",
     val openModel: String = "",            // the model this conversation uses (single mode)
@@ -90,6 +94,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<PremiumState> = _state.asStateFlow()
 
     private var genJob: Job? = null
+    private var searchJob: Job? = null
 
     private val _agentState = MutableStateFlow(PremiumAgentState())
     val agentState: StateFlow<PremiumAgentState> = _agentState.asStateFlow()
@@ -154,6 +159,34 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     // Change the model used by the currently-open conversation.
     fun setOpenModel(id: String) {
         _state.value = _state.value.copy(openModel = id)
+    }
+
+    /** Called as the user types. Debounced; blank query clears results. */
+    fun setQuery(q: String) {
+        _state.value = _state.value.copy(query = q)
+        searchJob?.cancel()
+        if (q.isBlank()) {
+            _state.value = _state.value.copy(results = emptyList(), searching = false)
+            return
+        }
+        val b = base()
+        if (b.isBlank()) return
+        _state.value = _state.value.copy(searching = true)
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(250)
+            val r = runCatching { PremiumClient.search(b, q.trim()) }
+            withContext(Dispatchers.Main) {
+                if (_state.value.query == q) {
+                    r.onSuccess { _state.value = _state.value.copy(results = it, searching = false) }
+                     .onFailure { _state.value = _state.value.copy(searching = false, error = it.message) }
+                }
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _state.value = _state.value.copy(query = "", results = emptyList(), searching = false)
     }
 
     fun refreshList() {

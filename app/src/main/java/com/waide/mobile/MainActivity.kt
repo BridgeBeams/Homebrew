@@ -238,6 +238,8 @@ private fun Shell(
                     onDownloadFile = { pvm.downloadStoredFile(it) },
                     onDismissFilesMsg = { pvm.dismissFilesMsg() },
                     onDismissCompacting = { pvm.dismissCompactingNotice() },
+                    onSearch = { pvm.setQuery(it) },
+                    onClearSearch = { pvm.clearSearch() },
                     modifier = Modifier.weight(1f)
                 ) else PremiumAgentsPane(
                     state = premiumAgentState,
