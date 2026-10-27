@@ -50,6 +50,7 @@ data class PremiumState(
     val filesOpen: Boolean = false,
     val loadingFiles: Boolean = false,
     val filesMsg: String? = null,
+    val fileThumbs: Map<String, String> = emptyMap(),   // fileId -> image base64 (for thumbnails)
     // compaction: how many leading turns are folded into the summary, and a transient notice
     val compactedCount: Int = 0,
     val compactedAt: Double = 0.0,
@@ -158,7 +159,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = _state.value.copy(openId = id, openTitle = d.title,
                         openModel = d.model.ifBlank { _state.value.selectedModel },
                         openMode = d.mode, openModels = d.models, messages = d.messages, busy = false,
-                        files = emptyList(), filesOpen = false,
+                        files = emptyList(), filesOpen = false, fileThumbs = emptyMap(),
                         compactedCount = d.compactedCount, compactedAt = d.compactedAt,
                         compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(busy = false, error = it.message) }
@@ -188,7 +189,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null,
             multiStreaming = emptyMap(), multiDone = emptySet(), openMode = "single", openModels = emptyList(),
             busy = false, pendingAttachments = emptyList(),
-            files = emptyList(), filesOpen = false, filesMsg = null,
+            files = emptyList(), filesOpen = false, filesMsg = null, fileThumbs = emptyMap(),
             compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
         refreshList()
     }
@@ -204,7 +205,9 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = _state.value.copy(openId = id, openTitle = "New chat", openModel = model,
                         openMode = "single", openModels = emptyList(),
                         messages = emptyList(), streaming = null, multiStreaming = emptyMap(), multiDone = emptySet(),
-                        busy = false, pendingAttachments = emptyList(), error = null)
+                        busy = false, pendingAttachments = emptyList(), error = null,
+                        files = emptyList(), filesOpen = false, fileThumbs = emptyMap(),
+                        compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(error = it.message) }
             }
         }
@@ -235,7 +238,9 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = _state.value.copy(openId = id, openTitle = "Ask all",
                         openModel = clean.first(), openMode = "multi", openModels = clean,
                         messages = emptyList(), streaming = null, multiStreaming = emptyMap(), multiDone = emptySet(),
-                        busy = false, pendingAttachments = emptyList(), error = null)
+                        busy = false, pendingAttachments = emptyList(), error = null,
+                        files = emptyList(), filesOpen = false, fileThumbs = emptyMap(),
+                        compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(error = it.message) }
             }
         }
@@ -373,9 +378,21 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(loadingFiles = true)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { PremiumClient.files(b, id) }
+            val list = r.getOrNull()
             withContext(Dispatchers.Main) {
-                r.onSuccess { _state.value = _state.value.copy(files = it, loadingFiles = false) }
-                 .onFailure { _state.value = _state.value.copy(loadingFiles = false, filesMsg = it.message) }
+                if (list != null) _state.value = _state.value.copy(files = list, loadingFiles = false)
+                else _state.value = _state.value.copy(loadingFiles = false, filesMsg = r.exceptionOrNull()?.message)
+            }
+            // Pull each image's bytes so the folder can show a real thumbnail.
+            if (list != null) {
+                for (f in list) {
+                    if (f.kind != "image" || _state.value.fileThumbs.containsKey(f.id)) continue
+                    if (_state.value.openId != id) break
+                    val data = runCatching { PremiumClient.fileData(b, id, f.id).data }.getOrNull()
+                    if (!data.isNullOrBlank()) withContext(Dispatchers.Main) {
+                        _state.value = _state.value.copy(fileThumbs = _state.value.fileThumbs + (f.id to data))
+                    }
+                }
             }
         }
     }

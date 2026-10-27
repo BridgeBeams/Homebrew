@@ -49,6 +49,7 @@ data class ConvState(
     val filesOpen: Boolean = false,
     val loadingFiles: Boolean = false,
     val filesMsg: String? = null,
+    val fileThumbs: Map<String, String> = emptyMap(),   // fileId -> image base64 (for thumbnails)
     // compaction
     val compactedCount: Int = 0,
     val compactedAt: Double = 0.0,
@@ -205,7 +206,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun openConversation(id: String) {
         val b = base()
         _state.value = _state.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null,
-            files = emptyList(), filesOpen = false, compactingNotice = false)
+            files = emptyList(), filesOpen = false, fileThumbs = emptyMap(), compactingNotice = false)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { ConversationsClient.get(b, token, id) }
             withContext(Dispatchers.Main) {
@@ -243,9 +244,21 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(loadingFiles = true)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { ConversationsClient.files(b, token, id) }
+            val list = r.getOrNull()
             withContext(Dispatchers.Main) {
-                r.onSuccess { _state.value = _state.value.copy(files = it, loadingFiles = false) }
-                 .onFailure { _state.value = _state.value.copy(loadingFiles = false, filesMsg = it.message) }
+                if (list != null) _state.value = _state.value.copy(files = list, loadingFiles = false)
+                else _state.value = _state.value.copy(loadingFiles = false, filesMsg = r.exceptionOrNull()?.message)
+            }
+            // Pull each image's bytes so the folder can show a real thumbnail.
+            if (list != null) {
+                for (f in list) {
+                    if (f.kind != "image" || _state.value.fileThumbs.containsKey(f.id)) continue
+                    if (_state.value.openId != id) break
+                    val data = runCatching { ConversationsClient.fileData(b, token, id, f.id).data }.getOrNull()
+                    if (!data.isNullOrBlank()) withContext(Dispatchers.Main) {
+                        _state.value = _state.value.copy(fileThumbs = _state.value.fileThumbs + (f.id to data))
+                    }
+                }
             }
         }
     }
@@ -304,7 +317,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun closeConversation() {
         genJob?.cancel()
         _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false,
-            files = emptyList(), filesOpen = false, filesMsg = null,
+            files = emptyList(), filesOpen = false, filesMsg = null, fileThumbs = emptyMap(),
             compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
         refreshList()
     }
@@ -317,8 +330,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "New conversation",
                         messages = emptyList(), streaming = null, busy = false, error = null,
-                        files = emptyList(), filesOpen = false, compactedCount = 0, compactedAt = 0.0,
-                        compactingNotice = false)
+                        files = emptyList(), filesOpen = false, fileThumbs = emptyMap(),
+                        compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(error = it.message) }
             }
         }
