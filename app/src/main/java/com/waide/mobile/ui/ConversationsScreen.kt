@@ -665,7 +665,7 @@ private fun ConvChat(
     zoomB64?.let { b64 -> ImageZoomDialog(b64) { zoomB64 = null } }
     if (state.filesOpen) {
         ConvFilesDialog(
-            files = state.files, loading = state.loadingFiles,
+            files = state.files, loading = state.loadingFiles, thumbs = state.fileThumbs,
             onReattach = onReattachFile, onDownload = onDownloadFile,
             onRefresh = onRefreshFiles, onClose = onCloseFiles
         )

@@ -538,7 +538,7 @@ private fun PremiumChat(
     zoomB64?.let { b64 -> PremiumZoomDialog(b64) { zoomB64 = null } }
     if (state.filesOpen) {
         ConvFilesDialog(
-            files = state.files, loading = state.loadingFiles,
+            files = state.files, loading = state.loadingFiles, thumbs = state.fileThumbs,
             onReattach = onReattachFile, onDownload = onDownloadFile,
             onRefresh = onRefreshFiles, onClose = onCloseFiles
         )
@@ -868,7 +868,7 @@ private fun PremiumAskAllDialog(
 /** Shared conversation-files dialog, reused by Premium and Saved Chats. */
 @Composable
 fun ConvFilesDialog(
-    files: List<ConvFile>, loading: Boolean,
+    files: List<ConvFile>, loading: Boolean, thumbs: Map<String, String>,
     onReattach: (String) -> Unit, onDownload: (String) -> Unit,
     onRefresh: () -> Unit, onClose: () -> Unit
 ) {
@@ -897,15 +897,32 @@ fun ConvFilesDialog(
                     items(files) { f ->
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if (f.kind == "image") Icons.Filled.Image else Icons.Filled.AttachFile,
-                                    contentDescription = null, tint = W.Muted, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(f.name, color = W.Text, style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                val thumb = if (f.kind == "image") thumbs[f.id] else null
+                                when {
+                                    f.kind == "image" && thumb != null -> {
+                                        val bmp = remember(thumb) { decodeThumb(thumb, 96) }
+                                        if (bmp != null) Image(bmp, "thumbnail", Modifier.size(44.dp)
+                                            .border(1.dp, W.Line, RoundedCornerShape(4.dp)), contentScale = ContentScale.Crop)
+                                        else Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Filled.Image, null, tint = W.Muted, modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+                                    f.kind == "image" -> Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), color = W.Amber, strokeWidth = 2.dp)
+                                    }
+                                    else -> Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Filled.AttachFile, null, tint = W.Muted, modifier = Modifier.size(22.dp))
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(f.name, color = W.Text, style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${fmtWhen(f.added)} · ${fmtSize(f.size)}", color = W.Muted,
+                                        style = MaterialTheme.typography.labelSmall)
+                                }
                             }
-                            Text("${fmtWhen(f.added)} · ${fmtSize(f.size)}", color = W.Muted,
-                                style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 26.dp))
-                            Row(Modifier.padding(start = 20.dp, top = 2.dp)) {
+                            Row(Modifier.padding(start = 54.dp, top = 2.dp)) {
                                 TextButton(onClick = { onReattach(f.id) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
                                     Icon(Icons.Filled.AttachFile, null, tint = W.Amber, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp)); Text("Reattach", color = W.Amber)
@@ -941,4 +958,16 @@ private fun fmtSize(bytes: Long): String {
 private fun decodeB64(b64: String): ImageBitmap? = runCatching {
     val bytes = Base64.decode(b64, Base64.DEFAULT)
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()
+
+/** Decode a base64 image downsampled to roughly reqPx, so a folder of pictures stays light. */
+private fun decodeThumb(b64: String, reqPx: Int): ImageBitmap? = runCatching {
+    val bytes = Base64.decode(b64, Base64.DEFAULT)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sample = 1
+    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+    while (maxDim / sample > reqPx * 2) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
 }.getOrNull()
