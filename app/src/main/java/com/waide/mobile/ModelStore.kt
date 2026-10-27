@@ -111,6 +111,22 @@ class ModelStore(context: Context) {
     fun getPremiumModel(): String = prefs.getString("premiumModel", "") ?: ""
     fun setPremiumModel(id: String) { prefs.edit().putString("premiumModel", id).apply() }
 
+    // Favorite Premium models (float to the top of the picker). Stored as a JSON array.
+    fun getFavoriteModels(): Set<String> {
+        val raw = prefs.getString("premiumFavorites", "") ?: ""
+        if (raw.isBlank()) return emptySet()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    fun setFavoriteModels(ids: Set<String>) {
+        val arr = JSONArray()
+        ids.forEach { arr.put(it) }
+        prefs.edit().putString("premiumFavorites", arr.toString()).apply()
+    }
+
     // The one answering model for the whole server side (amnesia Server tab AND the
     // private Conversations tab share it). Set from Settings. Falls back to the old
     // per-tab key so an existing install keeps its previous choice.
