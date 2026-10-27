@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -174,7 +175,9 @@ private fun Shell(
                                 textAlign = TextAlign.Center,
                                 maxLines = 2,
                                 softWrap = true,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp, lineHeight = 11.sp
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         },
