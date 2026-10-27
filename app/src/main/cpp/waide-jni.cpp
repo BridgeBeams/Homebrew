@@ -33,6 +33,7 @@ struct State {
     size_t                   prev_len = 0;
 
     std::string assistant_buf;          // text of the reply being generated
+    size_t      returned_len = 0;       // how much of assistant_buf was already emitted
     int   n_past      = 0;
     int   n_ctx       = 4096;
     int   n_threads   = 4;
@@ -54,6 +55,37 @@ std::string jstr(JNIEnv * env, jstring s) {
     std::string out(c ? c : "");
     env->ReleaseStringUTFChars(s, c);
     return out;
+}
+
+// Text stop sequences. Many GGUFs (e.g. Llama-2 merges like MythoMax) ship without a
+// chat template, so we fall back to ChatML and the model emits <|im_end|> / <|im_start|>
+// as plain TEXT rather than as end-of-generation tokens. Without this, generation runs
+// past the end of the reply and the model hallucinates both sides of the conversation.
+static const std::vector<std::string> STOP_SEQS = {
+    "<|im_end|>", "<|im_start|>", "<|eot_id|>", "<|end|>", "<|endoftext|>", "</s>",
+};
+
+// Position of the earliest complete stop sequence in s (from `from`), or npos.
+size_t find_stop(const std::string & s, size_t from) {
+    size_t best = std::string::npos;
+    for (const auto & st : STOP_SEQS) {
+        size_t p = s.find(st, from);
+        if (p != std::string::npos && p < best) best = p;
+    }
+    return best;
+}
+
+// How many trailing chars of s might be the start of a stop sequence, so we hold them
+// back from streaming until we know whether a stop sequence is forming.
+size_t stop_holdback(const std::string & s) {
+    size_t hold = 0;
+    for (const auto & st : STOP_SEQS) {
+        size_t maxp = std::min(s.size(), st.size() - 1);
+        for (size_t p = maxp; p >= 1; --p) {
+            if (st.compare(0, p, s, s.size() - p, p) == 0) { if (p > hold) hold = p; break; }
+        }
+    }
+    return hold;
 }
 
 // Fall back to a ChatML transcript when a GGUF ships without a chat template.
@@ -273,21 +305,6 @@ Java_com_waide_mobile_LlamaBridge_nativeSetSystemPrompt(JNIEnv * env, jobject, j
     }
 }
 
-// Append a remembered message (role = "user" or "assistant") to the history
-// without generating anything. Used to replay the brain-memory transcript into a
-// freshly loaded model so a model swap keeps the conversation intact. The next
-// nativeBeginTurn re-templates the whole history, so these primed turns are fed to
-// the new model as its prompt.
-JNIEXPORT void JNICALL
-Java_com_waide_mobile_LlamaBridge_nativePrimeMessage(JNIEnv * env, jobject, jstring role, jstring content) {
-    std::lock_guard<std::mutex> lock(g.mu);
-    std::string r = jstr(env, role);
-    std::string c = jstr(env, content);
-    if (c.empty()) return;
-    if (r != "user" && r != "assistant") r = "user";
-    g.history.push_back(ChatMsg{r, c});
-}
-
 // Queue a user turn: apply the template to the whole history, work out what is
 // new since last time, and tokenize only that delta.
 JNIEXPORT jint JNICALL
@@ -322,6 +339,7 @@ Java_com_waide_mobile_LlamaBridge_nativeBeginTurn(JNIEnv * env, jobject, jstring
     }
 
     g.assistant_buf.clear();
+    g.returned_len = 0;
     g.generating = true;
     return 0;
 }
@@ -359,6 +377,11 @@ Java_com_waide_mobile_LlamaBridge_nativeNextToken(JNIEnv * env, jobject) {
         g.history.push_back(ChatMsg{"assistant", g.assistant_buf});
         g.prev_len  = apply_template(g.history, false).size();
         g.generating = false;
+        if (g.returned_len < g.assistant_buf.size()) {
+            std::string tail = g.assistant_buf.substr(g.returned_len);
+            g.returned_len = g.assistant_buf.size();
+            return env->NewStringUTF(tail.c_str());
+        }
         return nullptr;
     }
 
@@ -367,11 +390,30 @@ Java_com_waide_mobile_LlamaBridge_nativeNextToken(JNIEnv * env, jobject) {
         g.prev_len  = apply_template(g.history, false).size();
         g.generating = false;
         g.last_error = "Reached the end of the context window.";
+        if (g.returned_len < g.assistant_buf.size()) {
+            std::string tail = g.assistant_buf.substr(g.returned_len);
+            g.returned_len = g.assistant_buf.size();
+            return env->NewStringUTF(tail.c_str());
+        }
         return nullptr;
     }
 
     std::string text = piece(tok);
     g.assistant_buf += text;
+
+    // Stop if the reply ran into a text stop sequence (e.g. ChatML <|im_end|>). We keep
+    // only the real reply, emit any not-yet-shown text up to the marker, and finish.
+    size_t sp = find_stop(g.assistant_buf, 0);
+    if (sp != std::string::npos) {
+        std::string out;
+        if (sp > g.returned_len) out = g.assistant_buf.substr(g.returned_len, sp - g.returned_len);
+        g.assistant_buf.resize(sp);
+        g.returned_len = g.assistant_buf.size();
+        g.history.push_back(ChatMsg{"assistant", g.assistant_buf});
+        g.prev_len  = apply_template(g.history, false).size();
+        g.generating = false;
+        return out.empty() ? nullptr : env->NewStringUTF(out.c_str());
+    }
 
     // Feed the sampled token back so the next call can sample the one after it.
     llama_batch nb = llama_batch_get_one(&tok, 1);
@@ -383,7 +425,15 @@ Java_com_waide_mobile_LlamaBridge_nativeNextToken(JNIEnv * env, jobject) {
     }
     g.n_past += 1;
 
-    return env->NewStringUTF(text.c_str());
+    // Stream only what can't be the start of a stop sequence; hold the rest back until
+    // the next token proves whether a marker is forming.
+    size_t safe = g.assistant_buf.size() - stop_holdback(g.assistant_buf);
+    if (safe > g.returned_len) {
+        std::string out = g.assistant_buf.substr(g.returned_len, safe - g.returned_len);
+        g.returned_len = safe;
+        return env->NewStringUTF(out.c_str());
+    }
+    return env->NewStringUTF("");  // nothing safe to show yet; keep generating
 }
 
 // Stop early. Whatever has been generated so far is kept as the reply.
