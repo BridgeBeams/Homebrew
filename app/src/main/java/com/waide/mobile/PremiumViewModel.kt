@@ -30,13 +30,30 @@ data class PremiumState(
     val loadingList: Boolean = false,
     val openId: String? = null,
     val openTitle: String = "",
-    val openModel: String = "",            // the model this conversation uses
+    val openModel: String = "",            // the model this conversation uses (single mode)
     val messages: List<PremiumMsg> = emptyList(),
     val streaming: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
+    // favorites (float to top of the picker everywhere)
+    val favorites: Set<String> = emptySet(),
+    // ask-all (multi-model) state
+    val openMode: String = "single",       // "single" or "multi"
+    val openModels: List<String> = emptyList(),   // the models this conversation fans out to
+    val multiStreaming: Map<Int, String> = emptyMap(), // column index -> text streaming now
+    val multiDone: Set<Int> = emptySet(),  // columns that have finished this turn
+    val askAllPicker: Boolean = false,     // the "pick up to 3" dialog is open
     // attachments waiting to send
     val pendingAttachments: List<PremiumAttach> = emptyList(),
+    // conversation files folder
+    val files: List<ConvFile> = emptyList(),
+    val filesOpen: Boolean = false,
+    val loadingFiles: Boolean = false,
+    val filesMsg: String? = null,
+    // compaction: how many leading turns are folded into the summary, and a transient notice
+    val compactedCount: Int = 0,
+    val compactedAt: Double = 0.0,
+    val compactingNotice: Boolean = false,
     // hide / unhide
     val unhideTarget: String? = null,
     val unhideError: String? = null
@@ -49,7 +66,10 @@ data class PremiumState(
 class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = ModelStore(app)
-    private val _state = MutableStateFlow(PremiumState(selectedModel = store.getPremiumModel()))
+    private val _state = MutableStateFlow(PremiumState(
+        selectedModel = store.getPremiumModel(),
+        favorites = store.getFavoriteModels()
+    ))
     val state: StateFlow<PremiumState> = _state.asStateFlow()
 
     private var genJob: Job? = null
@@ -129,13 +149,18 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openConversation(id: String) {
         val b = base()
-        _state.value = _state.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null)
+        _state.value = _state.value.copy(openId = id, messages = emptyList(), streaming = null,
+            multiStreaming = emptyMap(), multiDone = emptySet(), busy = true, error = null)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { PremiumClient.get(b, id) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { d ->
                     _state.value = _state.value.copy(openId = id, openTitle = d.title,
-                        openModel = d.model.ifBlank { _state.value.selectedModel }, messages = d.messages, busy = false)
+                        openModel = d.model.ifBlank { _state.value.selectedModel },
+                        openMode = d.mode, openModels = d.models, messages = d.messages, busy = false,
+                        files = emptyList(), filesOpen = false,
+                        compactedCount = d.compactedCount, compactedAt = d.compactedAt,
+                        compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(busy = false, error = it.message) }
             }
         }
@@ -143,17 +168,28 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun reloadOpen(id: String) {
         val b = base()
+        val prevCompactedAt = _state.value.compactedAt
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { PremiumClient.get(b, id) }
             withContext(Dispatchers.Main) {
-                r.onSuccess { d -> _state.value = _state.value.copy(openTitle = d.title, openModel = d.model.ifBlank { _state.value.openModel }, messages = d.messages) }
+                r.onSuccess { d -> _state.value = _state.value.copy(openTitle = d.title,
+                    openModel = d.model.ifBlank { _state.value.openModel },
+                    openMode = d.mode, openModels = d.models, messages = d.messages,
+                    compactedCount = d.compactedCount, compactedAt = d.compactedAt,
+                    compactingNotice = d.compactedAt > prevCompactedAt) }
             }
         }
     }
 
+    fun dismissCompactingNotice() { _state.value = _state.value.copy(compactingNotice = false) }
+
     fun closeConversation() {
         genJob?.cancel()
-        _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false, pendingAttachments = emptyList())
+        _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null,
+            multiStreaming = emptyMap(), multiDone = emptySet(), openMode = "single", openModels = emptyList(),
+            busy = false, pendingAttachments = emptyList(),
+            files = emptyList(), filesOpen = false, filesMsg = null,
+            compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
         refreshList()
     }
 
@@ -166,7 +202,40 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "New chat", openModel = model,
-                        messages = emptyList(), streaming = null, busy = false, pendingAttachments = emptyList(), error = null)
+                        openMode = "single", openModels = emptyList(),
+                        messages = emptyList(), streaming = null, multiStreaming = emptyMap(), multiDone = emptySet(),
+                        busy = false, pendingAttachments = emptyList(), error = null)
+                }.onFailure { _state.value = _state.value.copy(error = it.message) }
+            }
+        }
+    }
+
+    // ---------------- favorites ----------------
+    fun toggleFavorite(id: String) {
+        val cur = _state.value.favorites.toMutableSet()
+        if (!cur.add(id)) cur.remove(id)
+        store.setFavoriteModels(cur)
+        _state.value = _state.value.copy(favorites = cur)
+    }
+
+    // ---------------- ask all (multi-model) ----------------
+    fun openAskAllPicker() { _state.value = _state.value.copy(askAllPicker = true) }
+    fun dismissAskAllPicker() { _state.value = _state.value.copy(askAllPicker = false) }
+
+    /** Create a new multi-model conversation that fans each question out to all [models]. */
+    fun startAskAll(models: List<String>) {
+        val b = base()
+        val clean = models.distinct().filter { it.isNotBlank() }.take(3)
+        if (clean.isEmpty()) { _state.value = _state.value.copy(error = "Pick at least one model."); return }
+        _state.value = _state.value.copy(askAllPicker = false)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.createMulti(b, "Ask all", clean) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { id ->
+                    _state.value = _state.value.copy(openId = id, openTitle = "Ask all",
+                        openModel = clean.first(), openMode = "multi", openModels = clean,
+                        messages = emptyList(), streaming = null, multiStreaming = emptyMap(), multiDone = emptySet(),
+                        busy = false, pendingAttachments = emptyList(), error = null)
                 }.onFailure { _state.value = _state.value.copy(error = it.message) }
             }
         }
@@ -202,6 +271,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun send(text: String) {
+        if (_state.value.openMode == "multi") { sendMulti(text); return }
         val id = _state.value.openId ?: return
         val model = _state.value.openModel.ifBlank { _state.value.selectedModel }
         val prompt = text.trim()
@@ -238,12 +308,131 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun sendMulti(text: String) {
+        val id = _state.value.openId ?: return
+        val models = _state.value.openModels
+        val prompt = text.trim()
+        val atts = _state.value.pendingAttachments
+        if (_state.value.busy) return
+        if (prompt.isEmpty() && atts.isEmpty()) return
+        if (models.isEmpty()) { _state.value = _state.value.copy(error = "This chat has no models."); return }
+        val b = base()
+        // optimistic local echo of the user's turn
+        val localAtts = atts.map { if (it.kind == "image") it else it.copy(data = null) }
+        val localUser = PremiumMsg("local-${System.currentTimeMillis()}", "user", prompt, "", localAtts)
+        val startStreaming = models.indices.associateWith { "" }
+        _state.value = _state.value.copy(messages = _state.value.messages + localUser,
+            pendingAttachments = emptyList(), multiStreaming = startStreaming, multiDone = emptySet(),
+            busy = true, error = null)
+        GenerationService.begin(getApplication())
+        genJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val acc = HashMap<Int, String>()
+                models.indices.forEach { acc[it] = "" }
+                PremiumClient.multiChatStream(b, id, prompt, atts) { idx, piece, done ->
+                    if (piece.isNotEmpty()) acc[idx] = (acc[idx] ?: "") + piece
+                    val snapshot = HashMap(acc)
+                    _state.value = _state.value.copy(
+                        multiStreaming = snapshot,
+                        multiDone = if (done) _state.value.multiDone + idx else _state.value.multiDone)
+                }
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(multiStreaming = emptyMap(), multiDone = emptySet(), busy = false)
+                    reloadOpen(id)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(busy = false, multiStreaming = emptyMap(), multiDone = emptySet(),
+                        error = e.message ?: "Server error")
+                    reloadOpen(id)
+                }
+            } finally {
+                GenerationService.end(getApplication())
+            }
+        }
+    }
+
     fun stopGeneration() {
         genJob?.cancel()
-        _state.value = _state.value.copy(busy = false, streaming = null)
+        _state.value = _state.value.copy(busy = false, streaming = null, multiStreaming = emptyMap(), multiDone = emptySet())
     }
 
     fun dismissError() { _state.value = _state.value.copy(error = null) }
+
+    // ---------------- conversation files folder ----------------
+    fun openFiles() {
+        _state.value = _state.value.copy(filesOpen = true, filesMsg = null)
+        refreshFiles()
+    }
+    fun closeFiles() { _state.value = _state.value.copy(filesOpen = false) }
+    fun dismissFilesMsg() { _state.value = _state.value.copy(filesMsg = null) }
+
+    fun refreshFiles() {
+        val id = _state.value.openId ?: return
+        val b = base()
+        _state.value = _state.value.copy(loadingFiles = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.files(b, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _state.value = _state.value.copy(files = it, loadingFiles = false) }
+                 .onFailure { _state.value = _state.value.copy(loadingFiles = false, filesMsg = it.message) }
+            }
+        }
+    }
+
+    /** Pull a stored file back out of the folder and queue it to send again. */
+    fun reattachStoredFile(fid: String) {
+        val id = _state.value.openId ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.fileData(b, id, fid) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    _state.value = _state.value.copy(
+                        pendingAttachments = _state.value.pendingAttachments + it,
+                        filesOpen = false, filesMsg = null)
+                }.onFailure { _state.value = _state.value.copy(filesMsg = it.message) }
+            }
+        }
+    }
+
+    /** Save a stored file back onto the phone (Downloads). */
+    fun downloadStoredFile(fid: String) {
+        val id = _state.value.openId ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val att = PremiumClient.fileData(b, id, fid)
+                saveToDownloads(att.name, att.mime, Base64.decode(att.data ?: "", Base64.DEFAULT))
+            }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
+                               else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
+            }
+        }
+    }
+
+    private fun saveToDownloads(name: String, mime: String, bytes: ByteArray): String {
+        val ctx = getApplication<Application>()
+        val safe = name.ifBlank { "waide-file" }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val cv = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safe)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+            }
+            val uri = ctx.contentResolver.insert(
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                ?: throw IllegalStateException("could not create file")
+            ctx.contentResolver.openOutputStream(uri).use { it?.write(bytes) }
+        } else {
+            val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            java.io.File(dir, safe).writeBytes(bytes)
+        }
+        return safe
+    }
 
     // ---------------- attachments ----------------
     fun attachImage(uri: Uri) {

@@ -16,15 +16,25 @@ import java.net.URL
  */
 data class PremiumModel(val id: String, val name: String, val context: Int)
 data class PremiumAttach(val kind: String, val name: String, val mime: String, val data: String? = null)
+/** One file stored in a conversation's files folder (name + when it was added). */
+data class ConvFile(
+    val id: String, val name: String, val mime: String,
+    val kind: String, val size: Long, val added: Double
+)
 data class PremiumSummary(
     val id: String, val title: String, val model: String,
-    val updated: Double, val count: Int, val hidden: Boolean = false
+    val updated: Double, val count: Int, val hidden: Boolean = false,
+    val mode: String = "single", val models: List<String> = emptyList()
 )
 data class PremiumMsg(
     val id: String, val role: String, val text: String,
     val model: String = "", val attachments: List<PremiumAttach> = emptyList()
 )
-data class PremiumDetail(val title: String, val model: String, val messages: List<PremiumMsg>)
+data class PremiumDetail(
+    val title: String, val model: String, val messages: List<PremiumMsg>,
+    val mode: String = "single", val models: List<String> = emptyList(),
+    val compactedCount: Int = 0, val compactedAt: Double = 0.0
+)
 
 object PremiumClient {
 
@@ -69,6 +79,11 @@ object PremiumClient {
         }
     }
 
+    private fun strList(o: JSONObject, key: String): List<String> {
+        val a = o.optJSONArray(key) ?: return emptyList()
+        return (0 until a.length()).map { a.getString(it) }
+    }
+
     fun list(base: String): List<PremiumSummary> {
         val c = open("$base/premium/conversations", "GET")
         if (c.responseCode != 200) fail(c)
@@ -76,7 +91,8 @@ object PremiumClient {
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
             PremiumSummary(o.getString("id"), o.optString("title", "Untitled"), o.optString("model", ""),
-                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false))
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false),
+                o.optString("mode", "single"), strList(o, "models"))
         }
     }
 
@@ -86,6 +102,19 @@ object PremiumClient {
         c.setRequestProperty("Content-Type", "application/json")
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
             it.write(JSONObject().apply { if (title != null) put("title", title); put("model", model) }.toString())
+        }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    /** Create an Ask-all (multi-model) conversation. */
+    fun createMulti(base: String, title: String?, models: List<String>): String {
+        val c = open("$base/premium/conversations", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        val arr = JSONArray(); models.forEach { arr.put(it) }
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().apply { if (title != null) put("title", title); put("models", arr) }.toString())
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
@@ -112,7 +141,31 @@ object PremiumClient {
                     m.optString("model"), atts))
             }
         }
-        return PremiumDetail(o.optString("title", "Untitled"), o.optString("model", ""), msgs)
+        return PremiumDetail(o.optString("title", "Untitled"), o.optString("model", ""), msgs,
+            o.optString("mode", "single"), strList(o, "models"),
+            o.optInt("compacted_count", 0), o.optDouble("compacted_at", 0.0))
+    }
+
+    /** List the files stored in this conversation's files folder. */
+    fun files(base: String, id: String): List<ConvFile> {
+        val c = open("$base/premium/conversations/$id/files", "GET")
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            ConvFile(o.getString("id"), o.optString("name", "file"), o.optString("mime", ""),
+                o.optString("kind", "file"), o.optLong("size", 0), o.optDouble("added", 0.0))
+        }
+    }
+
+    /** Fetch one stored file's bytes (as a reattachable PremiumAttach carrying base64). */
+    fun fileData(base: String, id: String, fid: String): PremiumAttach {
+        val c = open("$base/premium/conversations/$id/files/$fid", "GET")
+        c.readTimeout = 60000
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        return PremiumAttach(o.optString("kind", "file"), o.optString("name", "file"),
+            o.optString("mime", "application/octet-stream"), o.optString("data"))
     }
 
     fun rename(base: String, id: String, title: String) {
@@ -192,5 +245,45 @@ object PremiumClient {
             }
         }
         return sb.toString()
+    }
+
+    /**
+     * Ask-all: one question fanned out to every model in the conversation. The server
+     * streams newline-delimited JSON frames, one per token: {"m":idx,"d":"token"} as
+     * text arrives, {"m":idx,"done":true} when a column finishes. onFrame(idx, piece, done)
+     * is called for each. idx is the column (position in the conversation's models list).
+     */
+    fun multiChatStream(
+        base: String, id: String, content: String,
+        attachments: List<PremiumAttach>, onFrame: (Int, String, Boolean) -> Unit
+    ) {
+        val c = open("$base/premium/conversations/$id/multichat", "POST")
+        c.doOutput = true
+        c.readTimeout = 0 // streaming
+        c.setRequestProperty("Content-Type", "application/json")
+        val body = JSONObject().put("content", content)
+        if (attachments.isNotEmpty()) {
+            val arr = JSONArray()
+            attachments.forEach { a ->
+                arr.put(JSONObject().put("kind", a.kind).put("name", a.name)
+                    .put("mime", a.mime).put("data", a.data ?: ""))
+            }
+            body.put("attachments", arr)
+        }
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(body.toString()) }
+        if (c.responseCode != 200) fail(c)
+        BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isBlank()) continue
+                runCatching {
+                    val o = JSONObject(line)
+                    val idx = o.optInt("m", 0)
+                    val done = o.optBoolean("done", false)
+                    val piece = o.optString("d", "")
+                    onFrame(idx, piece, done)
+                }
+            }
+        }
     }
 }

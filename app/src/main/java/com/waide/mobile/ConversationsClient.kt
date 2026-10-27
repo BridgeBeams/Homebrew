@@ -28,6 +28,15 @@ data class LoginInfo(
     val failedAttempts: List<Double>,
     val failedCount: Int
 )
+/** A conversation's detail, including how much of it is folded into the summary. */
+data class ConvDetail(
+    val title: String,
+    val messages: List<ConvMsg>,
+    val compactedCount: Int = 0,
+    val compactedAt: Double = 0.0
+)
+/** One stored file's bytes, pulled back out of the files folder. */
+data class ConvFileData(val name: String, val mime: String, val kind: String, val data: String)
 
 object ConversationsClient {
 
@@ -151,7 +160,7 @@ object ConversationsClient {
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
     }
 
-    fun get(base: String, token: String, id: String): Pair<String, List<ConvMsg>> {
+    fun get(base: String, token: String, id: String): ConvDetail {
         val c = open("$base/conversations/$id", "GET", token)
         if (c.responseCode != 200) fail(c)
         val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
@@ -165,7 +174,30 @@ object ConversationsClient {
                     if (img.isBlank()) null else img, vn.isNotBlank()))
             }
         }
-        return Pair(o.optString("title", "Untitled"), msgs)
+        return ConvDetail(o.optString("title", "Untitled"), msgs,
+            o.optInt("compacted_count", 0), o.optDouble("compacted_at", 0.0))
+    }
+
+    /** List files stored in this conversation's files folder. */
+    fun files(base: String, token: String, id: String): List<ConvFile> {
+        val c = open("$base/conversations/$id/files", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            ConvFile(o.getString("id"), o.optString("name", "file"), o.optString("mime", ""),
+                o.optString("kind", "file"), o.optLong("size", 0), o.optDouble("added", 0.0))
+        }
+    }
+
+    /** Fetch one stored file's bytes (base64) so it can be re-sent or saved. */
+    fun fileData(base: String, token: String, id: String, fid: String): ConvFileData {
+        val c = open("$base/conversations/$id/files/$fid", "GET", token)
+        c.readTimeout = 60000
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        return ConvFileData(o.optString("name", "file"), o.optString("mime", "application/octet-stream"),
+            o.optString("kind", "file"), o.optString("data"))
     }
 
     fun rename(base: String, token: String, id: String, title: String) {

@@ -43,7 +43,16 @@ data class ConvState(
     val results: List<ConvHit> = emptyList(),
     // image / vision (the image reader is chosen in Settings, shared with the Server tab)
     val pendingImageB64: String? = null,
-    val visionModel: String = ""
+    val visionModel: String = "",
+    // conversation files folder
+    val files: List<ConvFile> = emptyList(),
+    val filesOpen: Boolean = false,
+    val loadingFiles: Boolean = false,
+    val filesMsg: String? = null,
+    // compaction
+    val compactedCount: Int = 0,
+    val compactedAt: Double = 0.0,
+    val compactingNotice: Boolean = false
 )
 
 // The Agents side of the private area. Shares the same PIN session as conversations.
@@ -195,12 +204,14 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openConversation(id: String) {
         val b = base()
-        _state.value = _state.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null)
+        _state.value = _state.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null,
+            files = emptyList(), filesOpen = false, compactingNotice = false)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { ConversationsClient.get(b, token, id) }
             withContext(Dispatchers.Main) {
-                r.onSuccess { (title, msgs) ->
-                    _state.value = _state.value.copy(openId = id, openTitle = title, messages = msgs, busy = false)
+                r.onSuccess { d ->
+                    _state.value = _state.value.copy(openId = id, openTitle = d.title, messages = d.messages, busy = false,
+                        compactedCount = d.compactedCount, compactedAt = d.compactedAt, compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(busy = false, error = it.message) }
             }
         }
@@ -208,17 +219,93 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun reloadOpen(id: String) {
         val b = base()
+        val prevCompactedAt = _state.value.compactedAt
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { ConversationsClient.get(b, token, id) }
             withContext(Dispatchers.Main) {
-                r.onSuccess { (title, msgs) -> _state.value = _state.value.copy(openTitle = title, messages = msgs) }
+                r.onSuccess { d -> _state.value = _state.value.copy(openTitle = d.title, messages = d.messages,
+                    compactedCount = d.compactedCount, compactedAt = d.compactedAt,
+                    compactingNotice = d.compactedAt > prevCompactedAt) }
             }
         }
     }
 
+    fun dismissCompactingNotice() { _state.value = _state.value.copy(compactingNotice = false) }
+
+    // ---------------- conversation files folder ----------------
+    fun openFiles() { _state.value = _state.value.copy(filesOpen = true, filesMsg = null); refreshFiles() }
+    fun closeFiles() { _state.value = _state.value.copy(filesOpen = false) }
+    fun dismissFilesMsg() { _state.value = _state.value.copy(filesMsg = null) }
+
+    fun refreshFiles() {
+        val id = _state.value.openId ?: return
+        val b = base()
+        _state.value = _state.value.copy(loadingFiles = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.files(b, token, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _state.value = _state.value.copy(files = it, loadingFiles = false) }
+                 .onFailure { _state.value = _state.value.copy(loadingFiles = false, filesMsg = it.message) }
+            }
+        }
+    }
+
+    /** Re-attach a stored image so it is sent again (Saved Chats only stores images). */
+    fun reattachStoredFile(fid: String) {
+        val id = _state.value.openId ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.fileData(b, token, id, fid) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    if (it.kind == "image" && it.data.isNotBlank())
+                        _state.value = _state.value.copy(pendingImageB64 = it.data, filesOpen = false, filesMsg = null)
+                    else _state.value = _state.value.copy(filesMsg = "Only images can be re-attached here.")
+                }.onFailure { _state.value = _state.value.copy(filesMsg = it.message) }
+            }
+        }
+    }
+
+    fun downloadStoredFile(fid: String) {
+        val id = _state.value.openId ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val f = ConversationsClient.fileData(b, token, id, fid)
+                saveToDownloads(f.name, f.mime, android.util.Base64.decode(f.data, android.util.Base64.DEFAULT))
+            }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
+                               else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
+            }
+        }
+    }
+
+    private fun saveToDownloads(name: String, mime: String, bytes: ByteArray): String {
+        val ctx = getApplication<Application>()
+        val safe = name.ifBlank { "waide-file" }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val cv = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safe)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+            }
+            val uri = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                ?: throw IllegalStateException("could not create file")
+            ctx.contentResolver.openOutputStream(uri).use { it?.write(bytes) }
+        } else {
+            val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs(); java.io.File(dir, safe).writeBytes(bytes)
+        }
+        return safe
+    }
+
     fun closeConversation() {
         genJob?.cancel()
-        _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false)
+        _state.value = _state.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false,
+            files = emptyList(), filesOpen = false, filesMsg = null,
+            compactedCount = 0, compactedAt = 0.0, compactingNotice = false)
         refreshList()
     }
 
@@ -229,7 +316,9 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "New conversation",
-                        messages = emptyList(), streaming = null, busy = false, error = null)
+                        messages = emptyList(), streaming = null, busy = false, error = null,
+                        files = emptyList(), filesOpen = false, compactedCount = 0, compactedAt = 0.0,
+                        compactingNotice = false)
                 }.onFailure { _state.value = _state.value.copy(error = it.message) }
             }
         }

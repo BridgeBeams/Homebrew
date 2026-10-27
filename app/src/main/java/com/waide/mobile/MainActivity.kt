@@ -25,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -164,7 +165,16 @@ private fun Shell(
                         selected = tab == t,
                         onClick = { tab = t },
                         icon = { Icon(t.icon, contentDescription = t.label) },
-                        label = { Text(t.label) },
+                        label = {
+                            Text(
+                                t.label,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                softWrap = true,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = W.Amber,
                             selectedTextColor = W.Amber,
@@ -198,7 +208,18 @@ private fun Shell(
                     onFilePicked = { pvm.attachFile(it) },
                     onClearAttachment = { pvm.clearAttachment(it) },
                     onSetConvModel = { pvm.setOpenModel(it) },
-                    onRefreshModels = { pvm.refreshModels() }
+                    onRefreshModels = { pvm.refreshModels() },
+                    onToggleFavorite = { pvm.toggleFavorite(it) },
+                    onOpenAskAll = { pvm.openAskAllPicker() },
+                    onStartAskAll = { pvm.startAskAll(it) },
+                    onDismissAskAll = { pvm.dismissAskAllPicker() },
+                    onOpenFiles = { pvm.openFiles() },
+                    onCloseFiles = { pvm.closeFiles() },
+                    onRefreshFiles = { pvm.refreshFiles() },
+                    onReattachFile = { pvm.reattachStoredFile(it) },
+                    onDownloadFile = { pvm.downloadStoredFile(it) },
+                    onDismissFilesMsg = { pvm.dismissFilesMsg() },
+                    onDismissCompacting = { pvm.dismissCompactingNotice() }
                 )
                 Tab.Chat -> ChatScreen(
                     state = state,
@@ -238,6 +259,13 @@ private fun Shell(
                     onClearImage = { cvm.clearImage() },
                     onSearch = { cvm.setQuery(it) },
                     onClearSearch = { cvm.clearSearch() },
+                    onOpenFiles = { cvm.openFiles() },
+                    onCloseFiles = { cvm.closeFiles() },
+                    onRefreshFiles = { cvm.refreshFiles() },
+                    onReattachFile = { cvm.reattachStoredFile(it) },
+                    onDownloadFile = { cvm.downloadStoredFile(it) },
+                    onDismissFilesMsg = { cvm.dismissFilesMsg() },
+                    onDismissCompacting = { cvm.dismissCompactingNotice() },
                     agentState = agentState,
                     onAgentRefresh = { cvm.refreshAgents() },
                     onAgentOpen = { cvm.openAgent(it) },
