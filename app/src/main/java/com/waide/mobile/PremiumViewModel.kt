@@ -60,6 +60,22 @@ data class PremiumState(
     val unhideError: String? = null
 )
 
+/** Premium agents: personas that read ONLY premium conversations, answered on a cloud model. */
+data class PremiumAgentState(
+    val agents: List<PremiumAgentSummary> = emptyList(),
+    val loadingList: Boolean = false,
+    val openId: String? = null,
+    val openName: String = "",
+    val openJob: String = "",
+    val openModel: String = "",
+    val messages: List<PremiumAgentMsg> = emptyList(),
+    val streaming: String? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+    val unhideTarget: String? = null,
+    val unhideError: String? = null
+)
+
 /**
  * Premium AI tab: paid cloud models via OpenRouter, keyed and stored on your PC server.
  * Open to use (no PIN); hiding a conversation needs no PIN, revealing one does.
@@ -74,6 +90,10 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<PremiumState> = _state.asStateFlow()
 
     private var genJob: Job? = null
+
+    private val _agentState = MutableStateFlow(PremiumAgentState())
+    val agentState: StateFlow<PremiumAgentState> = _agentState.asStateFlow()
+    private var agentGenJob: Job? = null
 
     private fun base(): String {
         val servers = store.loadServers()
@@ -547,6 +567,171 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
             val r = runCatching { PremiumClient.unhideAll(b, pin) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { refreshList(); onDone(null) }
+                 .onFailure { onDone(it.message ?: "wrong pin") }
+            }
+        }
+    }
+
+    // ---------------- premium agents (walled off: read premium conversations only) ----------------
+    fun refreshAgents() {
+        val b = base()
+        if (b.isBlank()) return
+        _agentState.value = _agentState.value.copy(loadingList = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.listAgents(b) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { _agentState.value = _agentState.value.copy(agents = it, loadingList = false, error = null) }
+                 .onFailure { _agentState.value = _agentState.value.copy(loadingList = false, error = it.message) }
+            }
+        }
+    }
+
+    fun openAgent(id: String) {
+        val b = base()
+        _agentState.value = _agentState.value.copy(openId = id, messages = emptyList(), streaming = null, busy = true, error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.getAgent(b, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d ->
+                    _agentState.value = _agentState.value.copy(openId = id, openName = d.name, openJob = d.job,
+                        openModel = d.model.ifBlank { _state.value.selectedModel }, messages = d.messages, busy = false)
+                }.onFailure { _agentState.value = _agentState.value.copy(busy = false, error = it.message) }
+            }
+        }
+    }
+
+    private fun reloadOpenAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.getAgent(b, id) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d -> _agentState.value = _agentState.value.copy(openName = d.name, openJob = d.job,
+                    openModel = d.model.ifBlank { _agentState.value.openModel }, messages = d.messages) }
+            }
+        }
+    }
+
+    fun closeAgent() {
+        agentGenJob?.cancel()
+        _agentState.value = _agentState.value.copy(openId = null, messages = emptyList(), streaming = null, busy = false)
+        refreshAgents()
+    }
+
+    fun newAgent(name: String, job: String, model: String) {
+        val b = base()
+        val m = model.ifBlank { _state.value.selectedModel }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.createAgent(b, name, job, m) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { id ->
+                    _agentState.value = _agentState.value.copy(openId = id, openName = name, openJob = job,
+                        openModel = m, messages = emptyList(), streaming = null, busy = false, error = null)
+                }.onFailure { _agentState.value = _agentState.value.copy(error = it.message) }
+            }
+        }
+    }
+
+    fun editAgent(id: String, name: String, job: String, model: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.editAgent(b, id, name, job, model) }
+            withContext(Dispatchers.Main) {
+                if (_agentState.value.openId == id)
+                    _agentState.value = _agentState.value.copy(openName = name, openJob = job,
+                        openModel = model.ifBlank { _agentState.value.openModel })
+                refreshAgents()
+            }
+        }
+    }
+
+    fun deleteAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.deleteAgent(b, id) }
+            withContext(Dispatchers.Main) {
+                if (_agentState.value.openId == id) _agentState.value = _agentState.value.copy(openId = null, messages = emptyList())
+                refreshAgents()
+            }
+        }
+    }
+
+    fun deleteAgentMsg(mid: String) {
+        val id = _agentState.value.openId ?: return
+        val b = base()
+        _agentState.value = _agentState.value.copy(messages = _agentState.value.messages.filter { it.id != mid })
+        viewModelScope.launch(Dispatchers.IO) { runCatching { PremiumClient.deleteAgentMsg(b, id, mid) } }
+    }
+
+    fun setAgentModel(id: String) { _agentState.value = _agentState.value.copy(openModel = id) }
+
+    fun sendToAgent(text: String) {
+        val id = _agentState.value.openId ?: return
+        val model = _agentState.value.openModel.ifBlank { _state.value.selectedModel }
+        val prompt = text.trim()
+        if (_agentState.value.busy || prompt.isEmpty()) return
+        if (model.isBlank()) { _agentState.value = _agentState.value.copy(error = "Pick a model for this agent first."); return }
+        val b = base()
+        val localUser = PremiumAgentMsg("local-${System.currentTimeMillis()}", "user", prompt, model)
+        _agentState.value = _agentState.value.copy(messages = _agentState.value.messages + localUser,
+            streaming = "", busy = true, error = null)
+        GenerationService.begin(getApplication())
+        agentGenJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var acc = ""
+                PremiumClient.agentChatStream(b, id, model, prompt) { piece ->
+                    acc += piece
+                    _agentState.value = _agentState.value.copy(streaming = acc)
+                }
+                withContext(Dispatchers.Main) {
+                    _agentState.value = _agentState.value.copy(streaming = null, busy = false)
+                    reloadOpenAgent(id)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _agentState.value = _agentState.value.copy(busy = false, streaming = null, error = e.message ?: "Server error")
+                }
+            } finally {
+                GenerationService.end(getApplication())
+            }
+        }
+    }
+
+    fun stopAgent() {
+        agentGenJob?.cancel()
+        _agentState.value = _agentState.value.copy(busy = false, streaming = null)
+    }
+
+    fun hideAgent(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.hideAgent(b, id) }
+            withContext(Dispatchers.Main) { refreshAgents() }
+        }
+    }
+
+    fun requestUnhideAgent(id: String) { _agentState.value = _agentState.value.copy(unhideTarget = id, unhideError = null) }
+    fun cancelUnhideAgent() { _agentState.value = _agentState.value.copy(unhideTarget = null, unhideError = null) }
+
+    fun submitUnhideAgent(pin: String) {
+        val id = _agentState.value.unhideTarget ?: return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.unhideAgent(b, id, pin) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    _agentState.value = _agentState.value.copy(unhideTarget = null, unhideError = null)
+                    refreshAgents()
+                }.onFailure { _agentState.value = _agentState.value.copy(unhideError = it.message ?: "wrong pin") }
+            }
+        }
+    }
+
+    fun unhideAllAgents(pin: String, onDone: (String?) -> Unit) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.unhideAllAgents(b, pin) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { refreshAgents(); onDone(null) }
                  .onFailure { onDone(it.message ?: "wrong pin") }
             }
         }

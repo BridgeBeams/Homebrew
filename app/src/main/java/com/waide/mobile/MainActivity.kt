@@ -33,7 +33,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.waide.mobile.ui.ChatScreen
 import com.waide.mobile.ui.ConversationsScreen
+import com.waide.mobile.ui.PremiumAgentsPane
 import com.waide.mobile.ui.PremiumScreen
+import com.waide.mobile.ui.SectionTab
 import com.waide.mobile.ui.ServerScreen
 import com.waide.mobile.ui.SettingsScreen
 import com.waide.mobile.ui.W
@@ -106,6 +108,7 @@ private fun Shell(
     val convState by cvm.state.collectAsState()
     val agentState by cvm.agentState.collectAsState()
     val premiumState by pvm.state.collectAsState()
+    val premiumAgentState by pvm.agentState.collectAsState()
 
     // Re-check permission and rescan whenever the app comes back to the front,
     // which is exactly when a download has just finished or access was granted.
@@ -131,7 +134,7 @@ private fun Shell(
     LaunchedEffect(tab) {
         if (tab != Tab.Convos) cvm.lock()
         if (tab == Tab.Chat) vm.ensureLocalModelLoaded()
-        if (tab == Tab.Premium) pvm.refreshStatus()
+        if (tab == Tab.Premium) { pvm.refreshStatus(); pvm.refreshAgents() }
     }
 
     Scaffold(
@@ -189,7 +192,22 @@ private fun Shell(
     ) { pad ->
         Box(Modifier.padding(pad).consumeWindowInsets(pad).background(W.Bg)) {
             when (tab) {
-                Tab.Premium -> PremiumScreen(
+                Tab.Premium -> {
+                  var premiumSection by rememberSaveable { mutableStateOf(0) } // 0 = Chats, 1 = Agents
+                  val showPremiumToggle = premiumState.openId == null && premiumAgentState.openId == null
+                  Column(Modifier.fillMaxSize()) {
+                    if (showPremiumToggle) {
+                        Row(
+                            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            SectionTab("Chats", premiumSection == 0, Modifier.weight(1f)) { premiumSection = 0 }
+                            Spacer(Modifier.width(8.dp))
+                            SectionTab("Agents", premiumSection == 1, Modifier.weight(1f)) { premiumSection = 1 }
+                        }
+                        HorizontalDivider(color = W.Line)
+                    }
+                    if (premiumSection == 0) PremiumScreen(
                     state = premiumState,
                     onRefresh = { pvm.refreshStatus() },
                     onNew = { pvm.newConversation() },
@@ -219,8 +237,34 @@ private fun Shell(
                     onReattachFile = { pvm.reattachStoredFile(it) },
                     onDownloadFile = { pvm.downloadStoredFile(it) },
                     onDismissFilesMsg = { pvm.dismissFilesMsg() },
-                    onDismissCompacting = { pvm.dismissCompactingNotice() }
+                    onDismissCompacting = { pvm.dismissCompactingNotice() },
+                    modifier = Modifier.weight(1f)
+                ) else PremiumAgentsPane(
+                    state = premiumAgentState,
+                    models = premiumState.models,
+                    loadingModels = premiumState.loadingModels,
+                    favorites = premiumState.favorites,
+                    defaultModel = premiumState.selectedModel,
+                    onRefresh = { pvm.refreshAgents() },
+                    onOpen = { pvm.openAgent(it) },
+                    onNew = { n, j, m -> pvm.newAgent(n, j, m) },
+                    onClose = { pvm.closeAgent() },
+                    onSend = { pvm.sendToAgent(it) },
+                    onStop = { pvm.stopAgent() },
+                    onEdit = { id, n, j, m -> pvm.editAgent(id, n, j, m) },
+                    onDeleteAgent = { pvm.deleteAgent(it) },
+                    onDeleteMsg = { pvm.deleteAgentMsg(it) },
+                    onHide = { pvm.hideAgent(it) },
+                    onRequestUnhide = { pvm.requestUnhideAgent(it) },
+                    onSubmitUnhide = { pvm.submitUnhideAgent(it) },
+                    onCancelUnhide = { pvm.cancelUnhideAgent() },
+                    onSetModel = { pvm.setAgentModel(it) },
+                    onRefreshModels = { pvm.refreshModels() },
+                    onToggleFavorite = { pvm.toggleFavorite(it) },
+                    modifier = Modifier.weight(1f)
                 )
+                  }
+                }
                 Tab.Chat -> ChatScreen(
                     state = state,
                     onSend = { vm.send(it) },
@@ -269,11 +313,11 @@ private fun Shell(
                     agentState = agentState,
                     onAgentRefresh = { cvm.refreshAgents() },
                     onAgentOpen = { cvm.openAgent(it) },
-                    onAgentNew = { n, j -> cvm.createAgent(n, j) },
+                    onAgentNew = { n, j, rp -> cvm.createAgent(n, j, rp) },
                     onAgentClose = { cvm.closeAgent() },
                     onAgentSend = { cvm.sendToAgent(it) },
                     onAgentStop = { cvm.stopAgent() },
-                    onAgentEdit = { id, n, j -> cvm.editAgent(id, n, j) },
+                    onAgentEdit = { id, n, j, rp -> cvm.editAgent(id, n, j, rp) },
                     onAgentDelete = { cvm.deleteAgent(it) },
                     onAgentDeleteMsg = { cvm.deleteAgentMsg(it) },
                     onAgentHide = { cvm.hideAgent(it) },

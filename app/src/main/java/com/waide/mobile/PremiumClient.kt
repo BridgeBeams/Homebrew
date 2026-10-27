@@ -35,6 +35,16 @@ data class PremiumDetail(
     val mode: String = "single", val models: List<String> = emptyList(),
     val compactedCount: Int = 0, val compactedAt: Double = 0.0
 )
+// Premium agents: a persona that reads ONLY your premium conversations, answered on a cloud model.
+data class PremiumAgentSummary(
+    val id: String, val name: String, val job: String, val model: String,
+    val updated: Double, val count: Int, val hidden: Boolean = false
+)
+data class PremiumAgentMsg(val id: String, val role: String, val text: String, val model: String = "")
+data class PremiumAgentDetail(
+    val name: String, val job: String, val model: String, val messages: List<PremiumAgentMsg>,
+    val compactedCount: Int = 0, val compactedAt: Double = 0.0
+)
 
 object PremiumClient {
 
@@ -285,5 +295,112 @@ object PremiumClient {
                 }
             }
         }
+    }
+
+    // ---------------- premium agents ----------------
+    fun listAgents(base: String): List<PremiumAgentSummary> {
+        val c = open("$base/premium/agents", "GET")
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            PremiumAgentSummary(o.getString("id"), o.optString("name", "Agent"), o.optString("job", ""),
+                o.optString("model", ""), o.optDouble("updated", 0.0), o.optInt("count", 0),
+                o.optBoolean("hidden", false))
+        }
+    }
+
+    fun createAgent(base: String, name: String, job: String, model: String): String {
+        val c = open("$base/premium/agents", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("name", name).put("job", job).put("model", model).toString())
+        }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun getAgent(base: String, id: String): PremiumAgentDetail {
+        val c = open("$base/premium/agents/$id", "GET")
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        val msgs = ArrayList<PremiumAgentMsg>()
+        o.optJSONArray("messages")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val m = arr.getJSONObject(i)
+                msgs.add(PremiumAgentMsg(m.optString("id"), m.optString("role"), m.optString("text"),
+                    m.optString("model")))
+            }
+        }
+        return PremiumAgentDetail(o.optString("name", "Agent"), o.optString("job", ""),
+            o.optString("model", ""), msgs, o.optInt("compacted_count", 0), o.optDouble("compacted_at", 0.0))
+    }
+
+    fun editAgent(base: String, id: String, name: String, job: String, model: String) {
+        val c = open("$base/premium/agents/$id/edit", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("name", name).put("job", job).put("model", model).toString())
+        }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteAgent(base: String, id: String) {
+        val c = open("$base/premium/agents/$id", "DELETE")
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteAgentMsg(base: String, id: String, mid: String) {
+        val c = open("$base/premium/agents/$id/messages/$mid", "DELETE")
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun hideAgent(base: String, id: String) {
+        val c = open("$base/premium/agents/$id/hide", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write("{}") }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun unhideAgent(base: String, id: String, pin: String) {
+        val c = open("$base/premium/agents/$id/unhide", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pin", pin).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun unhideAllAgents(base: String, pin: String): Int {
+        val c = open("$base/premium/agents/unhide-all", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pin", pin).toString()) }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optInt("unhidden", 0)
+    }
+
+    /** Streams the agent's reply as plain text chunks. Returns the full reply. */
+    fun agentChatStream(base: String, id: String, model: String, content: String, onToken: (String) -> Unit): String {
+        val c = open("$base/premium/agents/$id/chat", "POST")
+        c.doOutput = true
+        c.readTimeout = 0 // streaming
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("model", model).put("content", content).toString())
+        }
+        if (c.responseCode != 200) fail(c)
+        val sb = StringBuilder()
+        BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
+            val buf = CharArray(512)
+            while (true) {
+                val n = reader.read(buf)
+                if (n == -1) break
+                if (n > 0) { val p = String(buf, 0, n); sb.append(p); onToken(p) }
+            }
+        }
+        return sb.toString()
     }
 }
