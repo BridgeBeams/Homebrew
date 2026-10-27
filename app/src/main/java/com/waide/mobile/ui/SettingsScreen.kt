@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.waide.mobile.GgufFile
 import com.waide.mobile.HfFileOption
 import com.waide.mobile.LocalModelBrowse
+import com.waide.mobile.PremiumState
 import com.waide.mobile.ServerEntry
 import com.waide.mobile.ServerState
 import com.waide.mobile.WaideSettings
@@ -50,6 +51,12 @@ fun SettingsScreen(
     onLoadLocal: (GgufFile) -> Unit = {},
     onUnloadLocal: () -> Unit = {},
     onDeleteLocal: (GgufFile) -> Unit = {},
+    // premium AI (OpenRouter)
+    premiumState: PremiumState = PremiumState(),
+    onSetOpenRouterKey: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    onRefreshPremiumModels: () -> Unit = {},
+    onSetDefaultPremiumModel: (String) -> Unit = {},
+    onUnhideAllPremium: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     // local model search/download (Hugging Face, straight to the phone)
     localBrowse: LocalModelBrowse = LocalModelBrowse(),
     onLocalSearchHf: (String) -> Unit = {},
@@ -66,6 +73,10 @@ fun SettingsScreen(
     var unhideDialog by remember { mutableStateOf(false) }
     var unhideAgentsDialog by remember { mutableStateOf(false) }
     var unhideMsg by remember { mutableStateOf<String?>(null) }
+    var premiumKeyDialog by remember { mutableStateOf(false) }
+    var premiumModelDialog by remember { mutableStateOf(false) }
+    var unhidePremiumDialog by remember { mutableStateOf(false) }
+    var premiumMsg by remember { mutableStateOf<String?>(null) }
     var managingModels by remember { mutableStateOf(false) }
     var managingLocal by remember { mutableStateOf(false) }
 
@@ -190,6 +201,46 @@ fun SettingsScreen(
             onClick = { managingModels = true },
             colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
         ) { Text("Manage server models") }
+
+        Spacer(Modifier.height(18.dp))
+        HorizontalDivider(color = W.Line)
+        Spacer(Modifier.height(18.dp))
+        Text("PREMIUM AI", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Paid cloud models (Claude, GPT, Grok, and more) through OpenRouter. Your key " +
+                "is stored on your PC server, never on the phone, and all processing happens " +
+                "in the cloud. Get a key at openrouter.ai, then paste it here.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("OpenRouter key: ${if (premiumState.hasKey) "set" else "not set"}",
+            color = if (premiumState.hasKey) W.Text else W.Danger, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { premiumMsg = null; premiumKeyDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text(if (premiumState.hasKey) "Change OpenRouter key" else "Set OpenRouter key") }
+        Spacer(Modifier.height(10.dp))
+        Text("Default model: ${premiumState.selectedModel.ifBlank { "none set" }.substringAfterLast('/')}",
+            color = W.Text, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(8.dp))
+        Row {
+            Button(
+                onClick = { premiumModelDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Choose default model") }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { premiumMsg = null; unhidePremiumDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.SurfaceHi)
+            ) { Text("Unhide all", color = W.Amber) }
+        }
+        premiumMsg?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = if (it.startsWith("Revealed") || it.startsWith("Saved")) W.Muted else W.Danger,
+                style = MaterialTheme.typography.labelMedium)
+        }
 
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
@@ -351,7 +402,84 @@ fun SettingsScreen(
                 onCancel = { unhideAgentsDialog = false }
             )
         }
+        if (premiumKeyDialog) {
+            PremiumKeyDialog(
+                onSubmit = { pin, key ->
+                    onSetOpenRouterKey(pin, key) { err ->
+                        premiumMsg = err ?: "Saved."
+                        premiumKeyDialog = false
+                    }
+                },
+                onCancel = { premiumKeyDialog = false }
+            )
+        }
+        if (premiumModelDialog) {
+            PremiumModelPicker(
+                models = premiumState.models,
+                loading = premiumState.loadingModels,
+                current = premiumState.selectedModel,
+                onRefresh = onRefreshPremiumModels,
+                onPick = { onSetDefaultPremiumModel(it); premiumModelDialog = false },
+                onDismiss = { premiumModelDialog = false }
+            )
+        }
+        if (unhidePremiumDialog) {
+            UnhideAllDialog(
+                onSubmit = { pin ->
+                    onUnhideAllPremium(pin) { err ->
+                        premiumMsg = err ?: "Revealed all hidden premium chats."
+                        unhidePremiumDialog = false
+                    }
+                },
+                onCancel = { unhidePremiumDialog = false }
+            )
+        }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PremiumKeyDialog(onSubmit: (String, String) -> Unit, onCancel: () -> Unit) {
+    var pin by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        confirmButton = {
+            TextButton(onClick = { if (pin.length >= 4 && key.isNotBlank()) onSubmit(pin, key.trim()) },
+                enabled = pin.length >= 4 && key.isNotBlank()) { Text("Save", color = W.Amber) }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", color = W.Muted) } },
+        title = { Text("OpenRouter key", color = W.Text) },
+        text = {
+            Column {
+                Text("Your PIN confirms the change; the key is stored on your PC only.",
+                    color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = pin, onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
+                    singleLine = true, label = { Text("PIN", color = W.Muted) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                    )
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = key, onValueChange = { key = it }, singleLine = true,
+                    label = { Text("OpenRouter key (sk-or-...)", color = W.Muted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                    )
+                )
+            }
+        },
+        containerColor = W.Surface
+    )
 }
 
 @Composable
