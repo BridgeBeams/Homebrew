@@ -65,7 +65,8 @@ fun ChatScreen(
                 )
             } else if (state.contextUsed > 0) {
                 Text(
-                    text = "${state.contextUsed} ctx",
+                    text = if (state.contextSize > 0) "${state.contextUsed} / ${state.contextSize} ctx"
+                           else "${state.contextUsed} ctx",
                     style = MaterialTheme.typography.labelSmall,
                     color = W.Muted
                 )
