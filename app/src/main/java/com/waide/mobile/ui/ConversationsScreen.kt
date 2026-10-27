@@ -115,7 +115,8 @@ fun ConversationsScreen(
     // Unlocked: a Chats | Agents toggle sits on top, hidden while a thread is open.
     var section by remember { mutableStateOf(0) }   // 0 = Chats, 1 = Agents
     val showToggle = state.openId == null && agentState.openId == null
-    Column(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize()) {
+      Column(Modifier.fillMaxSize()) {
         if (showToggle) {
             Row(
                 Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 12.dp, vertical = 6.dp),
@@ -156,6 +157,22 @@ fun ConversationsScreen(
                 modifier = Modifier.weight(1f)
             )
         }
+      }
+
+      // A short "Welcome Wade" greeting right after unlocking, then it fades out.
+      var showWelcome by remember { mutableStateOf(false) }
+      LaunchedEffect(state.locked) {
+          if (!state.locked) {
+              showWelcome = true
+              kotlinx.coroutines.delay(4000)
+              showWelcome = false
+          }
+      }
+      if (showWelcome) {
+          Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
+              Text("Welcome Wade", color = W.Amber, style = MaterialTheme.typography.headlineMedium)
+          }
+      }
     }
 }
 

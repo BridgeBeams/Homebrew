@@ -30,6 +30,9 @@ fun SettingsScreen(
     onServerCtxChange: (Int) -> Unit = {},
     onUnhideAll: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     onUnhideAllAgents: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    onChangePassword: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    onRequestReset: (String, (String?) -> Unit) -> Unit = { _, _ -> },
+    onCompleteReset: (String, (String?) -> Unit) -> Unit = { _, _ -> },
     // server models (shared by the amnesia Server tab and the Convos tab)
     serverState: ServerState = ServerState(),
     onRefreshModels: () -> Unit = {},
@@ -73,6 +76,8 @@ fun SettingsScreen(
     var unhideDialog by remember { mutableStateOf(false) }
     var unhideAgentsDialog by remember { mutableStateOf(false) }
     var unhideMsg by remember { mutableStateOf<String?>(null) }
+    var changePwDialog by remember { mutableStateOf(false) }
+    var pwMsg by remember { mutableStateOf<String?>(null) }
     var premiumKeyDialog by remember { mutableStateOf(false) }
     var premiumModelDialog by remember { mutableStateOf(false) }
     var unhidePremiumDialog by remember { mutableStateOf(false) }
@@ -283,6 +288,22 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.labelMedium)
         }
 
+        Spacer(Modifier.height(14.dp))
+        Text("The code that unlocks this tab. If you forget it, use Forgot password with " +
+            "your master reset code to set a new one. The master code never unlocks chats " +
+            "on its own and never changes.",
+            color = W.Muted, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { pwMsg = null; changePwDialog = true },
+            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+        ) { Text("Change password") }
+        pwMsg?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = if (it.startsWith("Password")) W.Muted else W.Danger,
+                style = MaterialTheme.typography.labelMedium)
+        }
+
         Spacer(Modifier.height(18.dp))
         HorizontalDivider(color = W.Line)
         Spacer(Modifier.height(18.dp))
@@ -402,15 +423,29 @@ fun SettingsScreen(
                 onCancel = { unhideAgentsDialog = false }
             )
         }
-        if (premiumKeyDialog) {
-            PremiumKeyDialog(
-                onSubmit = { pin, key ->
-                    onSetOpenRouterKey(pin, key) { err ->
-                        premiumMsg = err ?: "Saved."
-                        premiumKeyDialog = false
+        if (changePwDialog) {
+            ChangePasswordDialog(
+                onSave = { current, newPin ->
+                    onChangePassword(current, newPin) { err ->
+                        pwMsg = err ?: "Password changed."
+                        if (err == null) changePwDialog = false
                     }
                 },
-                onCancel = { premiumKeyDialog = false }
+                onRequestReset = onRequestReset,
+                onCompleteReset = { newPin, done ->
+                    onCompleteReset(newPin) { err ->
+                        done(err)
+                        if (err == null) { pwMsg = "Password changed."; changePwDialog = false }
+                    }
+                },
+                onCancel = { changePwDialog = false }
+            )
+        }
+        if (premiumKeyDialog) {
+            PremiumKeyDialog(
+                save = onSetOpenRouterKey,
+                onClose = { premiumKeyDialog = false },
+                onSuccess = { premiumMsg = "Saved."; premiumKeyDialog = false }
             )
         }
         if (premiumModelDialog) {
@@ -439,16 +474,36 @@ fun SettingsScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PremiumKeyDialog(onSubmit: (String, String) -> Unit, onCancel: () -> Unit) {
+private fun PremiumKeyDialog(
+    save: (String, String, (String?) -> Unit) -> Unit,
+    onClose: () -> Unit,
+    onSuccess: () -> Unit
+) {
     var pin by remember { mutableStateOf("") }
     var key by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf<String?>(null) }
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!saving) onClose() },
         confirmButton = {
-            TextButton(onClick = { if (pin.length >= 4 && key.isNotBlank()) onSubmit(pin, key.trim()) },
-                enabled = pin.length >= 4 && key.isNotBlank()) { Text("Save", color = W.Amber) }
+            if (saving) {
+                CircularProgressIndicator(Modifier.size(22.dp), color = W.Amber, strokeWidth = 2.dp)
+            } else {
+                TextButton(
+                    onClick = {
+                        if (pin.length >= 4 && key.isNotBlank()) {
+                            saving = true; err = null
+                            save(pin, key.trim()) { e ->
+                                saving = false
+                                if (e == null) onSuccess() else err = e
+                            }
+                        }
+                    },
+                    enabled = pin.length >= 4 && key.isNotBlank()
+                ) { Text("Save", color = W.Amber) }
+            }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", color = W.Muted) } },
+        dismissButton = { TextButton(onClick = onClose, enabled = !saving) { Text("Cancel", color = W.Muted) } },
         title = { Text("OpenRouter key", color = W.Text) },
         text = {
             Column {
@@ -457,7 +512,7 @@ private fun PremiumKeyDialog(onSubmit: (String, String) -> Unit, onCancel: () ->
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = pin, onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
-                    singleLine = true, label = { Text("PIN", color = W.Muted) },
+                    singleLine = true, enabled = !saving, label = { Text("PIN", color = W.Muted) },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -468,7 +523,7 @@ private fun PremiumKeyDialog(onSubmit: (String, String) -> Unit, onCancel: () ->
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
-                    value = key, onValueChange = { key = it }, singleLine = true,
+                    value = key, onValueChange = { key = it }, singleLine = true, enabled = !saving,
                     label = { Text("OpenRouter key (sk-or-...)", color = W.Muted) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
@@ -476,6 +531,14 @@ private fun PremiumKeyDialog(onSubmit: (String, String) -> Unit, onCancel: () ->
                         focusedTextColor = W.Text, unfocusedTextColor = W.Text
                     )
                 )
+                if (saving) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Saving to your server...", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                }
+                err?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Text(it, color = W.Danger, style = MaterialTheme.typography.labelSmall)
+                }
             }
         },
         containerColor = W.Surface
@@ -507,6 +570,118 @@ private fun UnhideAllDialog(onSubmit: (String) -> Unit, onCancel: () -> Unit) {
                     focusedTextColor = W.Text, unfocusedTextColor = W.Text
                 )
             )
+        },
+        containerColor = W.Surface
+    )
+}
+
+@Composable
+private fun PinField(label: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { v -> onChange(v.filter { it.isDigit() }.take(6)) },
+        singleLine = true,
+        label = { Text(label, color = W.Muted) },
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        modifier = Modifier.fillMaxWidth(),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+            focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+            focusedTextColor = W.Text, unfocusedTextColor = W.Text
+        )
+    )
+}
+
+@Composable
+private fun ChangePasswordDialog(
+    onSave: (String, String) -> Unit,
+    onRequestReset: (String, (String?) -> Unit) -> Unit,
+    onCompleteReset: (String, (String?) -> Unit) -> Unit,
+    onCancel: () -> Unit
+) {
+    var cur by remember { mutableStateOf("") }
+    var neu by remember { mutableStateOf("") }
+    var forgotOpen by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        confirmButton = {
+            TextButton(onClick = { if (cur.length == 6 && neu.length == 6) onSave(cur, neu) },
+                enabled = cur.length == 6 && neu.length == 6) { Text("Save", color = W.Amber) }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Change password", color = W.Text) },
+        text = {
+            Column {
+                PinField("Current password", cur) { cur = it }
+                Spacer(Modifier.height(8.dp))
+                PinField("New password (6 digits)", neu) { neu = it }
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = { forgotOpen = true }, contentPadding = PaddingValues(0.dp)) {
+                    Text("Forgot password", color = W.Amber, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        },
+        containerColor = W.Surface
+    )
+    if (forgotOpen) ForgotPasswordDialog(onRequestReset, onCompleteReset, onCancel = { forgotOpen = false })
+}
+
+/** Two steps: enter the master reset code, then set a new unlock password. No email. */
+@Composable
+private fun ForgotPasswordDialog(
+    onRequestReset: (String, (String?) -> Unit) -> Unit,
+    onCompleteReset: (String, (String?) -> Unit) -> Unit,
+    onCancel: () -> Unit
+) {
+    var step by remember { mutableStateOf(0) }   // 0 = master code, 1 = new password
+    var master by remember { mutableStateOf("") }
+    var neu by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onCancel() },
+        confirmButton = {
+            if (step == 0) {
+                TextButton(
+                    onClick = {
+                        if (master.length == 6 && !busy) {
+                            busy = true; err = null
+                            onRequestReset(master) { e -> busy = false; err = e; if (e == null) { step = 1 } }
+                        }
+                    },
+                    enabled = master.length == 6 && !busy
+                ) { Text(if (busy) "Checking..." else "Continue", color = W.Amber) }
+            } else {
+                TextButton(
+                    onClick = {
+                        if (neu.length == 6 && !busy) {
+                            busy = true; err = null
+                            onCompleteReset(neu) { e -> busy = false; err = e }
+                        }
+                    },
+                    enabled = neu.length == 6 && !busy
+                ) { Text(if (busy) "Saving..." else "Set password", color = W.Amber) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Forgot password", color = W.Text) },
+        text = {
+            Column {
+                if (step == 0) {
+                    Text("Enter your master reset code to set a new unlock password. The master code " +
+                        "never unlocks Saved Chats on its own.",
+                        color = W.Muted, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(10.dp))
+                    PinField("Master code", master) { master = it }
+                } else {
+                    Text("Master code accepted. Choose a new 6-digit unlock password.",
+                        color = W.Muted, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(10.dp))
+                    PinField("New password", neu) { neu = it }
+                }
+                err?.let { Spacer(Modifier.height(8.dp)); Text(it, color = W.Danger, style = MaterialTheme.typography.labelSmall) }
+            }
         },
         containerColor = W.Surface
     )
