@@ -138,7 +138,7 @@ fun ConversationsScreen(
                     onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch,
                     Modifier.weight(1f))
             else
-                ConvChat(state, onClose, onSend, onStop, onDeleteMsg, onRename,
+                ConvChat(state, vm, onClose, onSend, onStop, onDeleteMsg, onRename,
                     onDeleteConv, onImagePicked, onClearImage,
                     onOpenFiles, onCloseFiles, onRefreshFiles, onReattachFile,
                     onDownloadFile, onDismissFilesMsg, onDismissCompacting, Modifier.weight(1f))
@@ -610,6 +610,7 @@ private fun UnhidePinDialog(error: String?, onSubmit: (String) -> Unit, onCancel
 @Composable
 private fun ConvChat(
     state: ConvState,
+    vm: com.waide.mobile.ConversationsViewModel,
     onClose: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -633,6 +634,7 @@ private fun ConvChat(
     var deleteOpen by remember { mutableStateOf(false) }
     var deleteMsgId by remember { mutableStateOf<String?>(null) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }
+    var saveFileFor by remember { mutableStateOf<ConvMsg?>(null) }
     val listState = rememberLazyListState()
     val streamingText = state.streaming
 
@@ -699,7 +701,8 @@ private fun ConvChat(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> ConvBubble(m, onImageTap = { zoomB64 = it }) { deleteMsgId = m.id } }
+                items(state.messages) { m -> ConvBubble(m, onImageTap = { zoomB64 = it },
+                    onSaveFile = { saveFileFor = m }) { deleteMsgId = m.id } }
                 if (streamingText != null) item { ConvBubble(ConvMsg("streaming", "assistant", streamingText.ifBlank { "..." })) {} }
             }
         }
@@ -816,6 +819,12 @@ private fun ConvChat(
         )
     }
     zoomB64?.let { b64 -> ImageZoomDialog(b64) { zoomB64 = null } }
+    saveFileFor?.let { m ->
+        SaveTextFileDialog(
+            onSave = { name -> vm.saveTextToFile(m.text, name); saveFileFor = null },
+            onDismiss = { saveFileFor = null }
+        )
+    }
     if (state.filesOpen) {
         ConvFilesDialog(
             files = state.files, loading = state.loadingFiles, thumbs = state.fileThumbs,
@@ -823,6 +832,37 @@ private fun ConvChat(
             onRefresh = onRefreshFiles, onClose = onCloseFiles
         )
     }
+}
+
+/** Ask for a filename, then save the message text to Downloads. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("waide-note.md") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }) { Text("Save", color = W.Amber) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Save as file", color = W.Text) },
+        text = {
+            Column {
+                Text("Saves this message's text to your phone's Downloads folder. " +
+                    "End the name with .md, .txt, .json, .csv, .html, etc. for the right file type.",
+                    color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    placeholder = { Text("filename.md", color = W.Muted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                    )
+                )
+            }
+        },
+        containerColor = W.Surface
+    )
 }
 
 /** Full-screen pinch/drag zoom for an attached image. Tap outside or back to close. */
@@ -855,15 +895,18 @@ private fun ImageZoomDialog(b64: String, onDismiss: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {}, onLongPress: () -> Unit) {
+private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {},
+                       onSaveFile: () -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     val clipboard = LocalClipboardManager.current
     var menuOpen by remember { mutableStateOf(false) }
-    // Long-press a message for Copy / Delete.
+    // Long-press a message for Copy / Save as file / Delete.
     Box {
     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
         if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
             onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Save as file", color = W.Text) },
+            onClick = { menuOpen = false; onSaveFile() })
         DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
             onClick = { menuOpen = false; onLongPress() })
     }

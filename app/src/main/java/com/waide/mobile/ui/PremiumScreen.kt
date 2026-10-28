@@ -116,7 +116,7 @@ fun PremiumScreen(
             onOpenAskAll, onStartAskAll, onDismissAskAll, onToggleFavorite, onRefreshModels,
             onSearch, onClearSearch, modifier)
     } else {
-        PremiumChat(state, onClose, onSend, onStop, onRename, onDeleteConv, onDeleteMsg,
+        PremiumChat(state, vm, onClose, onSend, onStop, onRename, onDeleteConv, onDeleteMsg,
             onImagePicked, onFilePicked, onClearAttachment, onSetConvModel, onRefreshModels,
             onToggleFavorite, onOpenFiles, onCloseFiles, onRefreshFiles, onReattachFile,
             onDownloadFile, onDismissFilesMsg, onDismissCompacting, modifier)
@@ -470,6 +470,7 @@ private fun premiumMatchesFilter(c: PremiumSummary, filter: String): Boolean = w
 @Composable
 private fun PremiumChat(
     state: PremiumState,
+    vm: com.waide.mobile.PremiumViewModel,
     onClose: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -497,6 +498,7 @@ private fun PremiumChat(
     var deleteOpen by remember { mutableStateOf(false) }
     var deleteMsgId by remember { mutableStateOf<String?>(null) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }
+    var saveFileFor by remember { mutableStateOf<PremiumMsg?>(null) }
     var modelPicker by remember { mutableStateOf(false) }
     val isMulti = state.openMode == "multi"
     val listState = rememberLazyListState()
@@ -583,7 +585,8 @@ private fun PremiumChat(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(segments) { seg ->
-                    if (seg.user != null) PremiumBubble(seg.user, onImageTap = { zoomB64 = it }) { deleteMsgId = seg.user.id }
+                    if (seg.user != null) PremiumBubble(seg.user, onImageTap = { zoomB64 = it },
+                        onSaveFile = { saveFileFor = seg.user }) { deleteMsgId = seg.user.id }
                     else PremiumMultiColumns(
                         models = state.openModels,
                         replies = seg.replies,
@@ -609,7 +612,8 @@ private fun PremiumChat(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> PremiumBubble(m, onImageTap = { zoomB64 = it }) { deleteMsgId = m.id } }
+                items(state.messages) { m -> PremiumBubble(m, onImageTap = { zoomB64 = it },
+                    onSaveFile = { saveFileFor = m }) { deleteMsgId = m.id } }
                 if (streamingText != null) item {
                     PremiumBubble(PremiumMsg("streaming", "assistant", streamingText.ifBlank { "..." }, state.openModel)) {}
                 }
@@ -739,6 +743,12 @@ private fun PremiumChat(
         )
     }
     zoomB64?.let { b64 -> PremiumZoomDialog(b64) { zoomB64 = null } }
+    saveFileFor?.let { m ->
+        SaveTextFileDialog(
+            onSave = { name -> vm.saveTextToFile(m.text, name); saveFileFor = null },
+            onDismiss = { saveFileFor = null }
+        )
+    }
     if (state.filesOpen) {
         ConvFilesDialog(
             files = state.files, loading = state.loadingFiles, thumbs = state.fileThumbs,
@@ -748,9 +758,41 @@ private fun PremiumChat(
     }
 }
 
+/** Ask for a filename, then save the message text to Downloads. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("waide-note.md") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }) { Text("Save", color = W.Amber) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Save as file", color = W.Text) },
+        text = {
+            Column {
+                Text("Saves this message's text to your phone's Downloads folder. " +
+                    "End the name with .md, .txt, .json, .csv, .html, etc. for the right file type.",
+                    color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    placeholder = { Text("filename.md", color = W.Muted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                    )
+                )
+            }
+        },
+        containerColor = W.Surface
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {}, onLongPress: () -> Unit) {
+private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {},
+                          onSaveFile: () -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     val who = if (isUser) "YOU" else m.model.substringAfterLast('/').ifBlank { "AI" }.uppercase()
     val clipboard = LocalClipboardManager.current
@@ -759,6 +801,8 @@ private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {}, onLo
     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
         if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
             onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Save as file", color = W.Text) },
+            onClick = { menuOpen = false; onSaveFile() })
         DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
             onClick = { menuOpen = false; onLongPress() })
     }
