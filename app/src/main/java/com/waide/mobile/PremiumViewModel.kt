@@ -90,20 +90,6 @@ data class PremiumAgentState(
  * Premium AI tab: paid cloud models via OpenRouter, keyed and stored on your PC server.
  * Open to use (no PIN); hiding a conversation needs no PIN, revealing one does.
  */
-/** MIME for a filename. Common document types get a real type; everything else
- *  (code like .kt/.py/.js, or anything unusual) uses octet-stream so Android keeps
- *  the exact name and extension instead of appending .txt. */
-private fun mimeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "md" -> "text/markdown"
-    "txt", "log" -> "text/plain"
-    "json" -> "application/json"
-    "csv" -> "text/csv"
-    "html", "htm" -> "text/html"
-    "xml" -> "application/xml"
-    "pdf" -> "application/pdf"
-    else -> "application/octet-stream"
-}
-
 class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = ModelStore(app)
@@ -654,17 +640,40 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Save an assistant (or any) message's text to the phone's Downloads as a file. */
+    /** Save a message to Downloads. The extension decides the format: .pdf renders a PDF,
+     *  .docx/.xlsx build real Office files, .html writes a web page, anything else saves
+     *  the text as-is with that extension. */
     fun saveTextToFile(text: String, filename: String) {
         val name = filename.trim().ifBlank { "waide-note.md" }
-        val mime = mimeForName(name)
+        val lower = name.lowercase()
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { saveToDownloads(name, mime, text.toByteArray(Charsets.UTF_8)) }
+            val r = runCatching {
+                val bytes: ByteArray = when {
+                    lower.endsWith(".pdf") -> buildTextPdf(text)
+                    lower.endsWith(".docx") -> buildDocx(text)
+                    lower.endsWith(".xlsx") -> buildXlsx(text)
+                    lower.endsWith(".html") || lower.endsWith(".htm") -> buildHtml(text).toByteArray(Charsets.UTF_8)
+                    else -> text.toByteArray(Charsets.UTF_8)
+                }
+                saveToDownloads(name, mimeForName(name), bytes)
+            }
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
                     filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
                                else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
             }
         }
+    }
+
+    // One-tap "Download as <format>" helpers: auto-pick a filename, then save.
+    fun saveMessageAsPdf(text: String) = saveTextToFile(text, suggestFileName(text) + ".pdf")
+    fun saveMessageAsDocx(text: String) = saveTextToFile(text, suggestFileName(text) + ".docx")
+    fun saveMessageAsXlsx(text: String) = saveTextToFile(text, suggestFileName(text) + ".xlsx")
+    fun saveMessageAsHtml(text: String) = saveTextToFile(text, suggestFileName(text) + ".html")
+    /** Auto-detect a code/text file (e.g. a ```python block saves as .py). */
+    fun saveMessageSmart(text: String) {
+        val (ext, content) = smartTextFile(text)
+        saveTextToFile(content, suggestFileName(text) + "." + ext)
     }
 
     // ---------------- attachments ----------------
