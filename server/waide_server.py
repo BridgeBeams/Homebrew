@@ -50,6 +50,11 @@ FILES_DIR = DATA_DIR / "convfiles"     # per-conversation file folders (the "fil
 # sent to OpenRouter.
 PREMIUM_AGENT_DIR = DATA_DIR / "premium_agents"
 PREMIUM_EMB_PATH = DATA_DIR / "premium_embeddings.json"
+# Projects: lightweight folders that group conversations. Kept in two separate stores so a
+# Saved-chat project can never hold a premium (OpenRouter) conversation and vice versa,
+# preserving the wall between private and cloud chats.
+PROJ_DIR = DATA_DIR / "projects"
+PREMIUM_PROJ_DIR = DATA_DIR / "premium_projects"
 
 # Premium AI (paid cloud models) goes through OpenRouter: one key, many models
 # (Claude, GPT, Grok, etc). The key is stored on this PC only, never returned to the
@@ -90,6 +95,8 @@ AGENT_DIR.mkdir(parents=True, exist_ok=True)
 PREMIUM_DIR.mkdir(parents=True, exist_ok=True)
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 PREMIUM_AGENT_DIR.mkdir(parents=True, exist_ok=True)
+PROJ_DIR.mkdir(parents=True, exist_ok=True)
+PREMIUM_PROJ_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class ApiError(Exception):
@@ -756,11 +763,13 @@ def list_convs():
             out.append({"id": c["id"],
                         "title": "hidden" if hidden else c.get("title", "Untitled"),
                         "hidden": hidden,
+                        "pinned": bool(c.get("pinned")),
+                        "project": c.get("project", "") or "",
                         "updated": c.get("updated", 0),
                         "count": len(c.get("messages", []))})
         except Exception:
             pass
-    out.sort(key=lambda x: x["updated"], reverse=True)
+    out.sort(key=lambda x: (0 if x["pinned"] else 1, -x["updated"]))
     return out
 
 
@@ -807,11 +816,13 @@ def search_convs(q):
                 else:
                     continue   # no match in this conversation
             out.append({"id": c["id"], "title": title,
+                        "pinned": bool(c.get("pinned")),
+                        "project": c.get("project", "") or "",
                         "updated": c.get("updated", 0),
                         "count": len(msgs), "snippet": snippet})
         except Exception:
             pass
-    out.sort(key=lambda x: x["updated"], reverse=True)
+    out.sort(key=lambda x: (0 if x["pinned"] else 1, -x["updated"]))
     return out
 
 
@@ -841,17 +852,35 @@ def search_premium(q):
                     continue
             out.append({"id": c["id"], "title": title, "mode": c.get("mode", "single"),
                         "models": c.get("models", []), "model": c.get("model", ""),
+                        "pinned": bool(c.get("pinned")),
+                        "project": c.get("project", "") or "",
                         "updated": c.get("updated", 0), "count": len(msgs), "snippet": snippet})
         except Exception:
             pass
-    out.sort(key=lambda x: x["updated"], reverse=True)
+    out.sort(key=lambda x: (0 if x["pinned"] else 1, -x["updated"]))
     return out
 
 
-def create_conv(title):
+def create_conv(title, project=""):
     cid = uuid.uuid4().hex
-    save_conv({"id": cid, "title": title or "New conversation", "messages": [], "hidden": False})
+    save_conv({"id": cid, "title": title or "New conversation", "messages": [],
+               "hidden": False, "pinned": False, "project": (project or "").strip()})
     return {"id": cid}
+
+
+def set_pinned(cid, val):
+    c = load_conv(cid)
+    c["pinned"] = bool(val)
+    save_conv(c)
+    return {"ok": True}
+
+
+def assign_conv_project(cid, project):
+    """Move a conversation into a project (empty string = unfiled)."""
+    c = load_conv(cid)
+    c["project"] = (project or "").strip()
+    save_conv(c)
+    return {"ok": True}
 
 
 def rename_conv(cid, title):
@@ -1335,18 +1364,21 @@ def list_premium():
                         "mode": mode,
                         "models": [] if hidden else c.get("models", []),
                         "hidden": hidden,
+                        "pinned": bool(c.get("pinned")),
+                        "project": c.get("project", "") or "",
                         "updated": c.get("updated", 0),
                         "count": len(c.get("messages", []))})
         except Exception:
             pass
-    out.sort(key=lambda x: x["updated"], reverse=True)
+    out.sort(key=lambda x: (0 if x["pinned"] else 1, -x["updated"]))
     return out
 
 
-def create_premium(title, model, models=None):
+def create_premium(title, model, models=None, project=""):
     pid = uuid.uuid4().hex
     rec = {"id": pid, "title": title or "New chat", "model": (model or "").strip(),
-           "hidden": False, "messages": []}
+           "hidden": False, "pinned": False, "project": (project or "").strip(),
+           "messages": []}
     clean = [m.strip() for m in (models or []) if m and m.strip()]
     if len(clean) > 1:
         rec["mode"] = "multi"
@@ -1354,6 +1386,90 @@ def create_premium(title, model, models=None):
         rec["model"] = clean[0]
     save_premium(rec)
     return {"id": pid}
+
+
+def set_premium_pinned(pid, val):
+    c = load_premium(pid)
+    c["pinned"] = bool(val)
+    save_premium(c)
+    return {"ok": True}
+
+
+def assign_premium_project(pid, project):
+    c = load_premium(pid)
+    c["project"] = (project or "").strip()
+    save_premium(c)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- projects
+# A project is just {id, name}. Conversations point at one via their "project" field.
+# Deleting a project never deletes conversations; it only un-files them.
+def _proj_path(base, pjid):
+    if not pjid.isalnum():
+        raise ApiError(400, "bad id")
+    return base / f"{pjid}.json"
+
+
+def _list_projects(base):
+    out = []
+    for p in base.glob("*.json"):
+        try:
+            c = json.loads(p.read_text("utf-8"))
+            out.append({"id": c["id"], "name": c.get("name", "Untitled"),
+                        "created": c.get("created", 0), "updated": c.get("updated", 0)})
+        except Exception:
+            pass
+    out.sort(key=lambda x: x.get("name", "").lower())
+    return out
+
+
+def _create_project(base, name):
+    pjid = uuid.uuid4().hex
+    now = time.time()
+    _proj_path(base, pjid).write_text(json.dumps(
+        {"id": pjid, "name": (name or "New project").strip() or "New project",
+         "created": now, "updated": now}), "utf-8")
+    return {"id": pjid}
+
+
+def _rename_project(base, pjid, name):
+    p = _proj_path(base, pjid)
+    if not p.exists():
+        raise ApiError(404, "project not found")
+    c = json.loads(p.read_text("utf-8"))
+    c["name"] = (name or "").strip() or c.get("name", "Untitled")
+    c["updated"] = time.time()
+    p.write_text(json.dumps(c), "utf-8")
+    return {"ok": True}
+
+
+def _delete_project(base, pjid, conv_dir):
+    """Remove the project. Member conversations are kept and returned to unfiled
+    (their updated time is preserved so ordering does not jump)."""
+    p = _proj_path(base, pjid)
+    if p.exists():
+        p.unlink()
+    for cp in conv_dir.glob("*.json"):
+        try:
+            c = json.loads(cp.read_text("utf-8"))
+            if (c.get("project") or "") == pjid:
+                c["project"] = ""
+                cp.write_text(json.dumps(c), "utf-8")
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+def list_projects():         return _list_projects(PROJ_DIR)
+def create_project(name):    return _create_project(PROJ_DIR, name)
+def rename_project(i, name): return _rename_project(PROJ_DIR, i, name)
+def delete_project(i):       return _delete_project(PROJ_DIR, i, CONV_DIR)
+
+def list_premium_projects():         return _list_projects(PREMIUM_PROJ_DIR)
+def create_premium_project(name):    return _create_project(PREMIUM_PROJ_DIR, name)
+def rename_premium_project(i, name): return _rename_project(PREMIUM_PROJ_DIR, i, name)
+def delete_premium_project(i):       return _delete_project(PREMIUM_PROJ_DIR, i, PREMIUM_DIR)
 
 
 def rename_premium(pid, title):
@@ -1490,7 +1606,39 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "POST" and parts == ["conversations"]:
             self._auth()
-            return self._send_json(200, create_conv(self._read_body().get("title")))
+            b = self._read_body()
+            return self._send_json(200, create_conv(b.get("title"), b.get("project", "")))
+
+        # ---- projects (Saved Chats) ----
+        if method == "GET" and parts == ["projects"]:
+            self._auth()
+            return self._send_json(200, list_projects())
+
+        if method == "POST" and parts == ["projects"]:
+            self._auth()
+            return self._send_json(200, create_project(self._read_body().get("name", "")))
+
+        # bulk-assign must come before /projects/{id}
+        if method == "POST" and parts == ["projects", "assign"]:
+            self._auth()
+            b = self._read_body()
+            pj = b.get("project", "")
+            n = 0
+            for cid in b.get("ids", []) or []:
+                try:
+                    assign_conv_project(cid, pj); n += 1
+                except Exception:
+                    pass
+            return self._send_json(200, {"ok": True, "count": n})
+
+        if (len(parts) == 3 and parts[0] == "projects"
+                and parts[2] == "rename" and method == "POST"):
+            self._auth()
+            return self._send_json(200, rename_project(parts[1], self._read_body().get("name", "")))
+
+        if len(parts) == 2 and parts[0] == "projects" and method == "DELETE":
+            self._auth()
+            return self._send_json(200, delete_project(parts[1]))
 
         if method == "POST" and parts == ["conversations", "unhide-all"]:
             if not verify_pin(self._read_body().get("pin", "")):
@@ -1516,6 +1664,16 @@ class Handler(BaseHTTPRequestHandler):
                 and parts[2] == "rename" and method == "POST"):
             self._auth()
             return self._send_json(200, rename_conv(parts[1], self._read_body().get("title", "")))
+
+        if (len(parts) == 3 and parts[0] == "conversations"
+                and parts[2] == "pin" and method == "POST"):
+            self._auth()
+            return self._send_json(200, set_pinned(parts[1], self._read_body().get("pinned", True)))
+
+        if (len(parts) == 3 and parts[0] == "conversations"
+                and parts[2] == "project" and method == "POST"):
+            self._auth()
+            return self._send_json(200, assign_conv_project(parts[1], self._read_body().get("project", "")))
 
         if (len(parts) == 3 and parts[0] == "conversations"
                 and parts[2] == "hide" and method == "POST"):
@@ -1634,7 +1792,34 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "POST" and parts == ["premium", "conversations"]:
             b = self._read_body()
-            return self._send_json(200, create_premium(b.get("title"), b.get("model"), b.get("models")))
+            return self._send_json(200, create_premium(b.get("title"), b.get("model"),
+                                                        b.get("models"), b.get("project", "")))
+
+        # ---- premium projects (walled off from Saved-chat projects) ----
+        if method == "GET" and parts == ["premium", "projects"]:
+            return self._send_json(200, list_premium_projects())
+
+        if method == "POST" and parts == ["premium", "projects"]:
+            return self._send_json(200, create_premium_project(self._read_body().get("name", "")))
+
+        if method == "POST" and parts == ["premium", "projects", "assign"]:
+            b = self._read_body()
+            pj = b.get("project", "")
+            n = 0
+            for pid in b.get("ids", []) or []:
+                try:
+                    assign_premium_project(pid, pj); n += 1
+                except Exception:
+                    pass
+            return self._send_json(200, {"ok": True, "count": n})
+
+        if (len(parts) == 4 and parts[0] == "premium" and parts[1] == "projects"
+                and parts[3] == "rename" and method == "POST"):
+            return self._send_json(200, rename_premium_project(parts[2], self._read_body().get("name", "")))
+
+        if (len(parts) == 3 and parts[0] == "premium" and parts[1] == "projects"
+                and method == "DELETE"):
+            return self._send_json(200, delete_premium_project(parts[2]))
 
         if method == "POST" and parts == ["premium", "conversations", "unhide-all"]:
             if not verify_pin(self._read_body().get("pin", "")):
@@ -1654,6 +1839,14 @@ class Handler(BaseHTTPRequestHandler):
         if (len(parts) == 4 and parts[0] == "premium" and parts[1] == "conversations"
                 and parts[3] == "rename" and method == "POST"):
             return self._send_json(200, rename_premium(parts[2], self._read_body().get("title", "")))
+
+        if (len(parts) == 4 and parts[0] == "premium" and parts[1] == "conversations"
+                and parts[3] == "pin" and method == "POST"):
+            return self._send_json(200, set_premium_pinned(parts[2], self._read_body().get("pinned", True)))
+
+        if (len(parts) == 4 and parts[0] == "premium" and parts[1] == "conversations"
+                and parts[3] == "project" and method == "POST"):
+            return self._send_json(200, assign_premium_project(parts[2], self._read_body().get("project", "")))
 
         if (len(parts) == 4 and parts[0] == "premium" and parts[1] == "conversations"
                 and parts[3] == "hide" and method == "POST"):
