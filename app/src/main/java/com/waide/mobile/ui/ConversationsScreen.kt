@@ -847,7 +847,7 @@ private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) 
         text = {
             Column {
                 Text("Saves this message's text to your phone's Downloads folder. " +
-                    "End the name with .md, .txt, .json, .csv, .html, etc. for the right file type.",
+                    "Any extension works, e.g. .kt, .py, .json, .md, .txt, .csv, .html.",
                     color = W.Muted, style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
