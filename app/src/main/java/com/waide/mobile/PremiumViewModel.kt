@@ -90,6 +90,20 @@ data class PremiumAgentState(
  * Premium AI tab: paid cloud models via OpenRouter, keyed and stored on your PC server.
  * Open to use (no PIN); hiding a conversation needs no PIN, revealing one does.
  */
+/** MIME for a filename. Common document types get a real type; everything else
+ *  (code like .kt/.py/.js, or anything unusual) uses octet-stream so Android keeps
+ *  the exact name and extension instead of appending .txt. */
+private fun mimeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "md" -> "text/markdown"
+    "txt", "log" -> "text/plain"
+    "json" -> "application/json"
+    "csv" -> "text/csv"
+    "html", "htm" -> "text/html"
+    "xml" -> "application/xml"
+    "pdf" -> "application/pdf"
+    else -> "application/octet-stream"
+}
+
 class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = ModelStore(app)
@@ -642,14 +656,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
     /** Save an assistant (or any) message's text to the phone's Downloads as a file. */
     fun saveTextToFile(text: String, filename: String) {
         val name = filename.trim().ifBlank { "waide-note.md" }
-        val mime = when {
-            name.endsWith(".md", true) -> "text/markdown"
-            name.endsWith(".json", true) -> "application/json"
-            name.endsWith(".csv", true) -> "text/csv"
-            name.endsWith(".html", true) || name.endsWith(".htm", true) -> "text/html"
-            name.endsWith(".xml", true) -> "application/xml"
-            else -> "text/plain"
-        }
+        val mime = mimeForName(name)
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { saveToDownloads(name, mime, text.toByteArray(Charsets.UTF_8)) }
             withContext(Dispatchers.Main) {
