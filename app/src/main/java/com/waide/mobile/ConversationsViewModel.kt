@@ -16,6 +16,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
+/** projectFilter sentinel meaning "conversations not in any project". */
+const val UNFILED_FILTER = "__unfiled__"
+
 data class ConvState(
     val locked: Boolean = true,
     val authBusy: Boolean = false,
@@ -41,6 +44,11 @@ data class ConvState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<ConvHit> = emptyList(),
+    // projects + multi-select
+    val projects: List<Project> = emptyList(),
+    val projectFilter: String = "",     // "" = all; "__unfiled__" = no project; else a project id
+    val selecting: Boolean = false,     // multi-select mode for "add to project"
+    val selected: Set<String> = emptySet(),
     // image / vision (the image reader is chosen in Settings, shared with the Server tab)
     val pendingImageB64: String? = null,
     val visionModel: String = "",
@@ -122,6 +130,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
                         loginInfo = info, visionModel = store.getVisionModel(),
                         selectedModel = store.getServerModel())
                     refreshList()
+                    refreshProjects()
                     refreshModels()
                     refreshAgents()
                 }.onFailure {
@@ -221,6 +230,122 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSearch() {
         searchJob?.cancel()
         _state.value = _state.value.copy(query = "", results = emptyList(), searching = false)
+    }
+
+    // ---------------- projects + pinning + multi-select ----------------
+    fun refreshProjects() {
+        if (token.isBlank()) return
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.projects(b, token) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { list ->
+                    // if the current filter points at a project that no longer exists, reset it
+                    val f = _state.value.projectFilter
+                    val stillValid = f.isEmpty() || f == UNFILED_FILTER || list.any { it.id == f }
+                    _state.value = _state.value.copy(projects = list,
+                        projectFilter = if (stillValid) f else "")
+                }
+            }
+        }
+    }
+
+    fun setProjectFilter(f: String) { _state.value = _state.value.copy(projectFilter = f) }
+
+    fun togglePin(id: String, pinned: Boolean) {
+        val b = base()
+        // optimistic: update the row now, then confirm with the server
+        _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+            if (it.id == id) it.copy(pinned = pinned) else it
+        })
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ConversationsClient.pin(b, token, id, pinned) }
+            withContext(Dispatchers.Main) { refreshList() }
+        }
+    }
+
+    fun createProject(name: String, onDone: (String?) -> Unit = {}) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { ConversationsClient.createProject(b, token, name) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { refreshProjects(); onDone(it) }
+                 .onFailure { _state.value = _state.value.copy(error = it.message); onDone(null) }
+            }
+        }
+    }
+
+    fun renameProject(id: String, name: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ConversationsClient.renameProject(b, token, id, name) }
+            withContext(Dispatchers.Main) { refreshProjects() }
+        }
+    }
+
+    /** Deletes the project only; its conversations return to Unfiled. */
+    fun deleteProject(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ConversationsClient.deleteProject(b, token, id) }
+            withContext(Dispatchers.Main) {
+                if (_state.value.projectFilter == id) _state.value = _state.value.copy(projectFilter = "")
+                refreshProjects(); refreshList()
+            }
+        }
+    }
+
+    /** Move one conversation into a project ("" = unfile). */
+    fun moveToProject(id: String, project: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ConversationsClient.setProject(b, token, id, project) }
+            withContext(Dispatchers.Main) { refreshList() }
+        }
+    }
+
+    // ---- multi-select ----
+    fun startSelecting(firstId: String? = null) {
+        _state.value = _state.value.copy(selecting = true,
+            selected = if (firstId != null) setOf(firstId) else emptySet())
+    }
+    fun toggleSelected(id: String) {
+        val cur = _state.value.selected
+        _state.value = _state.value.copy(selected = if (cur.contains(id)) cur - id else cur + id)
+    }
+    fun cancelSelecting() { _state.value = _state.value.copy(selecting = false, selected = emptySet()) }
+
+    /** Add all currently selected conversations to a project ("" = unfile), then exit select mode. */
+    fun assignSelectedToProject(project: String) {
+        val ids = _state.value.selected.toList()
+        if (ids.isEmpty()) { cancelSelecting(); return }
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ConversationsClient.assignBulk(b, token, ids, project) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(selecting = false, selected = emptySet())
+                refreshList()
+            }
+        }
+    }
+
+    /** Create a project, add the selected conversations to it, and exit select mode. */
+    fun createProjectForSelected(name: String) {
+        val ids = _state.value.selected.toList()
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val pid = ConversationsClient.createProject(b, token, name)
+                if (ids.isNotEmpty()) ConversationsClient.assignBulk(b, token, ids, pid)
+                pid
+            }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    _state.value = _state.value.copy(selecting = false, selected = emptySet())
+                    refreshProjects(); refreshList()
+                }.onFailure { _state.value = _state.value.copy(error = it.message) }
+            }
+        }
     }
 
     fun refreshModels() {
@@ -365,8 +490,11 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun newConversation() {
         val b = base()
+        // If viewing a specific project, start the new chat inside it.
+        val f = _state.value.projectFilter
+        val project = if (f.isNotEmpty() && f != UNFILED_FILTER) f else null
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { ConversationsClient.create(b, token, null) }
+            val r = runCatching { ConversationsClient.create(b, token, null, project) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "New conversation",

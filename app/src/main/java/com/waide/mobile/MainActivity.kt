@@ -243,6 +243,7 @@ private fun Shell(
                     }
                     if (premiumSection == 0) PremiumScreen(
                     state = premiumState,
+                    vm = pvm,
                     onRefresh = { pvm.refreshStatus() },
                     onNew = { pvm.newConversation() },
                     onOpen = { pvm.openConversation(it) },
@@ -321,6 +322,7 @@ private fun Shell(
                 )
                 Tab.Convos -> ConversationsScreen(
                     state = convState,
+                    vm = cvm,
                     onUnlock = { cvm.unlock(it) },
                     onRefreshList = { cvm.refreshList() },
                     onOpen = { cvm.openConversation(it) },

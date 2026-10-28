@@ -13,7 +13,10 @@ import java.net.URL
  * Everything except the PIN check needs the token returned by auth(). Standard
  * HttpURLConnection, no third-party libraries, same as ServerClient.
  */
-data class ConvSummary(val id: String, val title: String, val updated: Double, val count: Int, val hidden: Boolean = false)
+data class ConvSummary(val id: String, val title: String, val updated: Double, val count: Int,
+                       val hidden: Boolean = false, val pinned: Boolean = false, val project: String = "")
+/** A project: a named folder that groups conversations. */
+data class Project(val id: String, val name: String)
 data class ConvHit(val id: String, val title: String, val updated: Double, val count: Int, val snippet: String)
 data class ConvMsg(
     val id: String,
@@ -128,7 +131,8 @@ object ConversationsClient {
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
             ConvSummary(o.getString("id"), o.optString("title", "Untitled"),
-                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false))
+                o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false),
+                o.optBoolean("pinned", false), o.optString("project", ""))
         }
     }
 
@@ -171,15 +175,79 @@ object ConversationsClient {
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optInt("unhidden", 0)
     }
 
-    fun create(base: String, token: String, title: String?): String {
+    fun create(base: String, token: String, title: String?, project: String? = null): String {
         val c = open("$base/conversations", "POST", token)
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().apply { if (title != null) put("title", title) }.toString())
+            it.write(JSONObject().apply {
+                if (title != null) put("title", title)
+                if (!project.isNullOrBlank()) put("project", project)
+            }.toString())
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun pin(base: String, token: String, id: String, pinned: Boolean) {
+        val c = open("$base/conversations/$id/pin", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pinned", pinned).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Move one conversation into a project ("" = unfiled). */
+    fun setProject(base: String, token: String, id: String, project: String) {
+        val c = open("$base/conversations/$id/project", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("project", project).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    // ---- projects ----
+    fun projects(base: String, token: String): List<Project> {
+        val c = open("$base/projects", "GET", token)
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it); Project(o.getString("id"), o.optString("name", "Project"))
+        }
+    }
+
+    fun createProject(base: String, token: String, name: String): String {
+        val c = open("$base/projects", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("name", name).toString()) }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun renameProject(base: String, token: String, id: String, name: String) {
+        val c = open("$base/projects/$id/rename", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("name", name).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteProject(base: String, token: String, id: String) {
+        val c = open("$base/projects/$id", "DELETE", token)
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Add many conversations to a project ("" = unfile) in one call. */
+    fun assignBulk(base: String, token: String, ids: List<String>, project: String) {
+        val c = open("$base/projects/assign", "POST", token)
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        val arr = JSONArray(); ids.forEach { arr.put(it) }
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("ids", arr).put("project", project).toString())
+        }
+        if (c.responseCode != 200) fail(c)
     }
 
     fun get(base: String, token: String, id: String): ConvDetail {

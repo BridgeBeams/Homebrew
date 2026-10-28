@@ -24,7 +24,8 @@ data class ConvFile(
 data class PremiumSummary(
     val id: String, val title: String, val model: String,
     val updated: Double, val count: Int, val hidden: Boolean = false,
-    val mode: String = "single", val models: List<String> = emptyList()
+    val mode: String = "single", val models: List<String> = emptyList(),
+    val pinned: Boolean = false, val project: String = ""
 )
 data class PremiumMsg(
     val id: String, val role: String, val text: String,
@@ -108,16 +109,20 @@ object PremiumClient {
             val o = arr.getJSONObject(it)
             PremiumSummary(o.getString("id"), o.optString("title", "Untitled"), o.optString("model", ""),
                 o.optDouble("updated", 0.0), o.optInt("count", 0), o.optBoolean("hidden", false),
-                o.optString("mode", "single"), strList(o, "models"))
+                o.optString("mode", "single"), strList(o, "models"),
+                o.optBoolean("pinned", false), o.optString("project", ""))
         }
     }
 
-    fun create(base: String, title: String?, model: String): String {
+    fun create(base: String, title: String?, model: String, project: String? = null): String {
         val c = open("$base/premium/conversations", "POST")
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().apply { if (title != null) put("title", title); put("model", model) }.toString())
+            it.write(JSONObject().apply {
+                if (title != null) put("title", title); put("model", model)
+                if (!project.isNullOrBlank()) put("project", project)
+            }.toString())
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
@@ -137,16 +142,79 @@ object PremiumClient {
     }
 
     /** Create an Ask-all (multi-model) conversation. */
-    fun createMulti(base: String, title: String?, models: List<String>): String {
+    fun createMulti(base: String, title: String?, models: List<String>, project: String? = null): String {
         val c = open("$base/premium/conversations", "POST")
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         val arr = JSONArray(); models.forEach { arr.put(it) }
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
-            it.write(JSONObject().apply { if (title != null) put("title", title); put("models", arr) }.toString())
+            it.write(JSONObject().apply {
+                if (title != null) put("title", title); put("models", arr)
+                if (!project.isNullOrBlank()) put("project", project)
+            }.toString())
         }
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun pin(base: String, id: String, pinned: Boolean) {
+        val c = open("$base/premium/conversations/$id/pin", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("pinned", pinned).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    /** Move one premium conversation into a project ("" = unfiled). */
+    fun setProject(base: String, id: String, project: String) {
+        val c = open("$base/premium/conversations/$id/project", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("project", project).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    // ---- premium projects (separate store from Saved-chat projects) ----
+    fun projects(base: String): List<Project> {
+        val c = open("$base/premium/projects", "GET")
+        if (c.responseCode != 200) fail(c)
+        val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it); Project(o.getString("id"), o.optString("name", "Project"))
+        }
+    }
+
+    fun createProject(base: String, name: String): String {
+        val c = open("$base/premium/projects", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("name", name).toString()) }
+        if (c.responseCode != 200) fail(c)
+        return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getString("id")
+    }
+
+    fun renameProject(base: String, id: String, name: String) {
+        val c = open("$base/premium/projects/$id/rename", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(JSONObject().put("name", name).toString()) }
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun deleteProject(base: String, id: String) {
+        val c = open("$base/premium/projects/$id", "DELETE")
+        if (c.responseCode != 200) fail(c)
+    }
+
+    fun assignBulk(base: String, ids: List<String>, project: String) {
+        val c = open("$base/premium/projects/assign", "POST")
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        val arr = JSONArray(); ids.forEach { arr.put(it) }
+        OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+            it.write(JSONObject().put("ids", arr).put("project", project).toString())
+        }
+        if (c.responseCode != 200) fail(c)
     }
 
     fun get(base: String, id: String): PremiumDetail {

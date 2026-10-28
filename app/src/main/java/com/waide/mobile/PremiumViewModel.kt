@@ -32,6 +32,11 @@ data class PremiumState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<PremiumSearchHit> = emptyList(),
+    // projects + multi-select (walled off from Saved-chat projects)
+    val projects: List<Project> = emptyList(),
+    val projectFilter: String = "",     // "" = all; "__unfiled__" = no project; else a project id
+    val selecting: Boolean = false,
+    val selected: Set<String> = emptySet(),
     val openId: String? = null,
     val openTitle: String = "",
     val openModel: String = "",            // the model this conversation uses (single mode)
@@ -118,6 +123,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         refreshList()
+        refreshProjects()
     }
 
     // Callable from Settings. Sets the OpenRouter key (PIN required, checked on server).
@@ -189,6 +195,115 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(query = "", results = emptyList(), searching = false)
     }
 
+    // ---------------- projects + pinning + multi-select ----------------
+    fun refreshProjects() {
+        val b = base()
+        if (b.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.projects(b) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { list ->
+                    val f = _state.value.projectFilter
+                    val stillValid = f.isEmpty() || f == UNFILED_FILTER || list.any { it.id == f }
+                    _state.value = _state.value.copy(projects = list,
+                        projectFilter = if (stillValid) f else "")
+                }
+            }
+        }
+    }
+
+    fun setProjectFilter(f: String) { _state.value = _state.value.copy(projectFilter = f) }
+
+    fun togglePin(id: String, pinned: Boolean) {
+        val b = base()
+        _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+            if (it.id == id) it.copy(pinned = pinned) else it
+        })
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.pin(b, id, pinned) }
+            withContext(Dispatchers.Main) { refreshList() }
+        }
+    }
+
+    fun createProject(name: String, onDone: (String?) -> Unit = {}) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.createProject(b, name) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { refreshProjects(); onDone(it) }
+                 .onFailure { _state.value = _state.value.copy(error = it.message); onDone(null) }
+            }
+        }
+    }
+
+    fun renameProject(id: String, name: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.renameProject(b, id, name) }
+            withContext(Dispatchers.Main) { refreshProjects() }
+        }
+    }
+
+    fun deleteProject(id: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.deleteProject(b, id) }
+            withContext(Dispatchers.Main) {
+                if (_state.value.projectFilter == id) _state.value = _state.value.copy(projectFilter = "")
+                refreshProjects(); refreshList()
+            }
+        }
+    }
+
+    fun moveToProject(id: String, project: String) {
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.setProject(b, id, project) }
+            withContext(Dispatchers.Main) { refreshList() }
+        }
+    }
+
+    fun startSelecting(firstId: String? = null) {
+        _state.value = _state.value.copy(selecting = true,
+            selected = if (firstId != null) setOf(firstId) else emptySet())
+    }
+    fun toggleSelected(id: String) {
+        val cur = _state.value.selected
+        _state.value = _state.value.copy(selected = if (cur.contains(id)) cur - id else cur + id)
+    }
+    fun cancelSelecting() { _state.value = _state.value.copy(selecting = false, selected = emptySet()) }
+
+    fun assignSelectedToProject(project: String) {
+        val ids = _state.value.selected.toList()
+        if (ids.isEmpty()) { cancelSelecting(); return }
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { PremiumClient.assignBulk(b, ids, project) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(selecting = false, selected = emptySet())
+                refreshList()
+            }
+        }
+    }
+
+    fun createProjectForSelected(name: String) {
+        val ids = _state.value.selected.toList()
+        val b = base()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val pid = PremiumClient.createProject(b, name)
+                if (ids.isNotEmpty()) PremiumClient.assignBulk(b, ids, pid)
+                pid
+            }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    _state.value = _state.value.copy(selecting = false, selected = emptySet())
+                    refreshProjects(); refreshList()
+                }.onFailure { _state.value = _state.value.copy(error = it.message) }
+            }
+        }
+    }
+
     fun refreshList() {
         val b = base()
         _state.value = _state.value.copy(loadingList = true)
@@ -251,8 +366,10 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         val b = base()
         val model = _state.value.selectedModel
         if (model.isBlank()) { _state.value = _state.value.copy(error = "Pick a default model first."); return }
+        val f = _state.value.projectFilter
+        val project = if (f.isNotEmpty() && f != UNFILED_FILTER) f else null
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { PremiumClient.create(b, null, model) }
+            val r = runCatching { PremiumClient.create(b, null, model, project) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "New chat", openModel = model,
@@ -284,8 +401,10 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         val clean = models.distinct().filter { it.isNotBlank() }.take(3)
         if (clean.isEmpty()) { _state.value = _state.value.copy(error = "Pick at least one model."); return }
         _state.value = _state.value.copy(askAllPicker = false)
+        val f = _state.value.projectFilter
+        val project = if (f.isNotEmpty() && f != UNFILED_FILTER) f else null
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { PremiumClient.createMulti(b, "Ask all", clean) }
+            val r = runCatching { PremiumClient.createMulti(b, "Ask all", clean, project) }
             withContext(Dispatchers.Main) {
                 r.onSuccess { id ->
                     _state.value = _state.value.copy(openId = id, openTitle = "Ask all",
