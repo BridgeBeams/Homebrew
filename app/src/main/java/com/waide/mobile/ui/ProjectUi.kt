@@ -42,10 +42,10 @@ fun ProjectChipsRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        item { Chip("All", filter == "") { onFilter("") } }
-        item { Chip("Unfiled", filter == com.waide.mobile.UNFILED_FILTER) { onFilter(com.waide.mobile.UNFILED_FILTER) } }
+        item { WChip("All", filter == "") { onFilter("") } }
+        item { WChip("Unfiled", filter == com.waide.mobile.UNFILED_FILTER) { onFilter(com.waide.mobile.UNFILED_FILTER) } }
         items(projects) { p ->
-            Chip(p.name, filter == p.id, onClick = { onFilter(p.id) }, onLongClick = { onEditProject(p) })
+            WChip(p.name, filter == p.id, onLongClick = { onEditProject(p) }) { onFilter(p.id) }
         }
         item { NewChip(onNewProject) }
     }
@@ -53,7 +53,7 @@ fun ProjectChipsRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Chip(label: String, selected: Boolean, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
+private fun WChip(label: String, selected: Boolean, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(16.dp))
             .background(if (selected) W.SurfaceHi else W.Bg)
