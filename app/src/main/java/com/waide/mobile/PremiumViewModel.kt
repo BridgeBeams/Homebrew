@@ -25,6 +25,7 @@ data class PremiumState(
     val models: List<PremiumModel> = emptyList(),
     val loadingModels: Boolean = false,
     val selectedModel: String = "",        // default model for new chats
+    val usage: Double? = null,             // OpenRouter spend in dollars (null = not loaded)
     // conversations
     val conversations: List<PremiumSummary> = emptyList(),
     val loadingList: Boolean = false,
@@ -124,6 +125,19 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshList()
         refreshProjects()
+        refreshUsage()
+    }
+
+    /** Pull current OpenRouter spend so the Premium header can show it. */
+    fun refreshUsage() {
+        val b = base()
+        if (b.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { PremiumClient.usage(b) }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { if (it.hasKey) _state.value = _state.value.copy(usage = it.usage) }
+            }
+        }
     }
 
     // Callable from Settings. Sets the OpenRouter key (PIN required, checked on server).
@@ -474,6 +488,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.Main) {
                     _state.value = _state.value.copy(streaming = null, busy = false)
                     reloadOpen(id)
+                    refreshUsage()
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -516,6 +531,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.Main) {
                     _state.value = _state.value.copy(multiStreaming = emptyMap(), multiDone = emptySet(), busy = false)
                     reloadOpen(id)
+                    refreshUsage()
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {

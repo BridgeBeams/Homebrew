@@ -15,6 +15,8 @@ import java.net.URL
  * in OpenRouter's cloud, not on the phone or PC.
  */
 data class PremiumModel(val id: String, val name: String, val context: Int)
+/** OpenRouter account spend, read with the key stored on the PC server. */
+data class PremiumUsage(val hasKey: Boolean, val usage: Double, val credits: Double, val remaining: Double)
 data class PremiumAttach(val kind: String, val name: String, val mime: String, val data: String? = null)
 /** One file stored in a conversation's files folder (name + when it was added). */
 data class ConvFile(
@@ -73,6 +75,15 @@ object PremiumClient {
         val c = open("$base/premium/status", "GET")
         if (c.responseCode != 200) fail(c)
         return JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optBoolean("has_key", false)
+    }
+
+    /** Current OpenRouter spend (reads the account via the stored key). */
+    fun usage(base: String): PremiumUsage {
+        val c = open("$base/premium/usage", "GET")
+        if (c.responseCode != 200) fail(c)
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        return PremiumUsage(o.optBoolean("has_key", false), o.optDouble("usage", 0.0),
+            o.optDouble("credits", 0.0), o.optDouble("remaining", 0.0))
     }
 
     fun setKey(base: String, pin: String, key: String) {
