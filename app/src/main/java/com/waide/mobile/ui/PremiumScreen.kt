@@ -499,6 +499,7 @@ private fun PremiumChat(
     var deleteMsgId by remember { mutableStateOf<String?>(null) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }
     var saveFileFor by remember { mutableStateOf<PremiumMsg?>(null) }
+    var downloadFor by remember { mutableStateOf<PremiumMsg?>(null) }
     var modelPicker by remember { mutableStateOf(false) }
     val isMulti = state.openMode == "multi"
     val listState = rememberLazyListState()
@@ -586,7 +587,7 @@ private fun PremiumChat(
             ) {
                 items(segments) { seg ->
                     if (seg.user != null) PremiumBubble(seg.user, onImageTap = { zoomB64 = it },
-                        onSaveFile = { saveFileFor = seg.user }) { deleteMsgId = seg.user.id }
+                        onDownload = { downloadFor = seg.user }) { deleteMsgId = seg.user.id }
                     else PremiumMultiColumns(
                         models = state.openModels,
                         replies = seg.replies,
@@ -613,7 +614,7 @@ private fun PremiumChat(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(state.messages) { m -> PremiumBubble(m, onImageTap = { zoomB64 = it },
-                    onSaveFile = { saveFileFor = m }) { deleteMsgId = m.id } }
+                    onDownload = { downloadFor = m }) { deleteMsgId = m.id } }
                 if (streamingText != null) item {
                     PremiumBubble(PremiumMsg("streaming", "assistant", streamingText.ifBlank { "..." }, state.openModel)) {}
                 }
@@ -743,6 +744,17 @@ private fun PremiumChat(
         )
     }
     zoomB64?.let { b64 -> PremiumZoomDialog(b64) { zoomB64 = null } }
+    downloadFor?.let { m ->
+        FormatChooserDialog(
+            onPdf = { vm.saveMessageAsPdf(m.text); downloadFor = null },
+            onDocx = { vm.saveMessageAsDocx(m.text); downloadFor = null },
+            onXlsx = { vm.saveMessageAsXlsx(m.text); downloadFor = null },
+            onHtml = { vm.saveMessageAsHtml(m.text); downloadFor = null },
+            onSmart = { vm.saveMessageSmart(m.text); downloadFor = null },
+            onCustom = { saveFileFor = m; downloadFor = null },
+            onDismiss = { downloadFor = null }
+        )
+    }
     saveFileFor?.let { m ->
         SaveTextFileDialog(
             onSave = { name -> vm.saveTextToFile(m.text, name); saveFileFor = null },
@@ -770,8 +782,9 @@ private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) 
         title = { Text("Save as file", color = W.Text) },
         text = {
             Column {
-                Text("Saves this message's text to your phone's Downloads folder. " +
-                    "Any extension works, e.g. .kt, .py, .json, .md, .txt, .csv, .html.",
+                Text("Saves this message to your phone's Downloads folder. " +
+                    "Any extension works: .pdf, .docx, .xlsx and .html build real files; " +
+                    ".kt, .py, .json, .md, .txt, .csv and others save as text.",
                     color = W.Muted, style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
@@ -792,7 +805,7 @@ private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {},
-                          onSaveFile: () -> Unit = {}, onLongPress: () -> Unit) {
+                          onDownload: () -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     val who = if (isUser) "YOU" else m.model.substringAfterLast('/').ifBlank { "AI" }.uppercase()
     val clipboard = LocalClipboardManager.current
@@ -801,8 +814,8 @@ private fun PremiumBubble(m: PremiumMsg, onImageTap: (String) -> Unit = {},
     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
         if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
             onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
-        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Save as file", color = W.Text) },
-            onClick = { menuOpen = false; onSaveFile() })
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Download...", color = W.Text) },
+            onClick = { menuOpen = false; onDownload() })
         DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
             onClick = { menuOpen = false; onLongPress() })
     }

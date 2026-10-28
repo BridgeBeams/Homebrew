@@ -215,3 +215,44 @@ fun ProjectEditDialog(
         containerColor = W.Surface
     )
 }
+
+/** Pick a file format to download a message as. Each row triggers its save immediately. */
+@Composable
+fun FormatChooserDialog(
+    onPdf: () -> Unit,
+    onDocx: () -> Unit,
+    onXlsx: () -> Unit,
+    onHtml: () -> Unit,
+    onSmart: () -> Unit,
+    onCustom: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Download as", color = W.Text) },
+        text = {
+            Column {
+                FmtRow("PDF document (.pdf)", onPdf)
+                HorizontalDivider(color = W.Line)
+                FmtRow("Word document (.docx)", onDocx)
+                HorizontalDivider(color = W.Line)
+                FmtRow("Excel spreadsheet (.xlsx)", onXlsx)
+                HorizontalDivider(color = W.Line)
+                FmtRow("Web page (.html)", onHtml)
+                HorizontalDivider(color = W.Line)
+                FmtRow("Code or text file (auto)", onSmart)
+                HorizontalDivider(color = W.Line)
+                FmtRow("Custom name or type...", onCustom)
+            }
+        },
+        containerColor = W.Surface
+    )
+}
+
+@Composable
+private fun FmtRow(label: String, onClick: () -> Unit) {
+    Text(label, color = W.Text, style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp))
+}

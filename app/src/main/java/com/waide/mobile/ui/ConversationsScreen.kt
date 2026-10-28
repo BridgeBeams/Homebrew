@@ -635,6 +635,7 @@ private fun ConvChat(
     var deleteMsgId by remember { mutableStateOf<String?>(null) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }
     var saveFileFor by remember { mutableStateOf<ConvMsg?>(null) }
+    var downloadFor by remember { mutableStateOf<ConvMsg?>(null) }
     val listState = rememberLazyListState()
     val streamingText = state.streaming
 
@@ -702,7 +703,7 @@ private fun ConvChat(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(state.messages) { m -> ConvBubble(m, onImageTap = { zoomB64 = it },
-                    onSaveFile = { saveFileFor = m }) { deleteMsgId = m.id } }
+                    onDownload = { downloadFor = m }) { deleteMsgId = m.id } }
                 if (streamingText != null) item { ConvBubble(ConvMsg("streaming", "assistant", streamingText.ifBlank { "..." })) {} }
             }
         }
@@ -819,6 +820,17 @@ private fun ConvChat(
         )
     }
     zoomB64?.let { b64 -> ImageZoomDialog(b64) { zoomB64 = null } }
+    downloadFor?.let { m ->
+        FormatChooserDialog(
+            onPdf = { vm.saveMessageAsPdf(m.text); downloadFor = null },
+            onDocx = { vm.saveMessageAsDocx(m.text); downloadFor = null },
+            onXlsx = { vm.saveMessageAsXlsx(m.text); downloadFor = null },
+            onHtml = { vm.saveMessageAsHtml(m.text); downloadFor = null },
+            onSmart = { vm.saveMessageSmart(m.text); downloadFor = null },
+            onCustom = { saveFileFor = m; downloadFor = null },
+            onDismiss = { downloadFor = null }
+        )
+    }
     saveFileFor?.let { m ->
         SaveTextFileDialog(
             onSave = { name -> vm.saveTextToFile(m.text, name); saveFileFor = null },
@@ -846,8 +858,9 @@ private fun SaveTextFileDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) 
         title = { Text("Save as file", color = W.Text) },
         text = {
             Column {
-                Text("Saves this message's text to your phone's Downloads folder. " +
-                    "Any extension works, e.g. .kt, .py, .json, .md, .txt, .csv, .html.",
+                Text("Saves this message to your phone's Downloads folder. " +
+                    "Any extension works: .pdf, .docx, .xlsx and .html build real files; " +
+                    ".kt, .py, .json, .md, .txt, .csv and others save as text.",
                     color = W.Muted, style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
@@ -896,17 +909,17 @@ private fun ImageZoomDialog(b64: String, onDismiss: () -> Unit) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {},
-                       onSaveFile: () -> Unit = {}, onLongPress: () -> Unit) {
+                       onDownload: () -> Unit = {}, onLongPress: () -> Unit) {
     val isUser = m.role == "user"
     val clipboard = LocalClipboardManager.current
     var menuOpen by remember { mutableStateOf(false) }
-    // Long-press a message for Copy / Save as file / Delete.
+    // Long-press a message for Copy / Download... / Delete.
     Box {
     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
         if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
             onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
-        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Save as file", color = W.Text) },
-            onClick = { menuOpen = false; onSaveFile() })
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Download...", color = W.Text) },
+            onClick = { menuOpen = false; onDownload() })
         DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
             onClick = { menuOpen = false; onLongPress() })
     }
