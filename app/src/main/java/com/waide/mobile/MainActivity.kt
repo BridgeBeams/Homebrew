@@ -152,6 +152,12 @@ private fun Shell(
         Tab.Convos -> convState.openId != null || agentState.openId != null
         else -> false
     }
+    // Multi-select is its own layer: back should cancel it, not prompt to exit.
+    val isSelecting = when (tab) {
+        Tab.Premium -> premiumState.selecting
+        Tab.Convos -> convState.selecting
+        else -> false
+    }
     BackHandler(enabled = hasOpenDetail) {
         when (tab) {
             Tab.Premium -> if (premiumState.openId != null) pvm.closeConversation() else pvm.closeAgent()
@@ -159,7 +165,14 @@ private fun Shell(
             else -> {}
         }
     }
-    BackHandler(enabled = !hasOpenDetail) {
+    BackHandler(enabled = !hasOpenDetail && isSelecting) {
+        when (tab) {
+            Tab.Premium -> pvm.cancelSelecting()
+            Tab.Convos -> cvm.cancelSelecting()
+            else -> {}
+        }
+    }
+    BackHandler(enabled = !hasOpenDetail && !isSelecting) {
         val now = System.currentTimeMillis()
         if (now - lastBackMs < 2000) {
             (context as? Activity)?.finish()
