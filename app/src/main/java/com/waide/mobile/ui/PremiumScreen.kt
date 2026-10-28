@@ -170,36 +170,45 @@ private fun PremiumList(
                 TextButton(onClick = { vm.cancelSelecting() }) { Text("Cancel", color = W.Muted) }
             }
         } else {
-            Row(
-                Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Premium AI", style = MaterialTheme.typography.titleMedium, color = W.Amber,
-                    modifier = Modifier.weight(1f))
-                if (state.conversations.isNotEmpty()) {
-                    TextButton(onClick = { vm.startSelecting() },
-                        contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Select", color = W.Muted) }
+            // Two rows: the title sits on its own line (no more wrapping), with the
+            // OpenRouter spend parked at the top right; the actions go on the second row.
+            Column(Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Premium AI", style = MaterialTheme.typography.titleMedium, color = W.Amber,
+                        maxLines = 1, modifier = Modifier.weight(1f))
+                    state.usage?.let { u ->
+                        Text("OpenRouter  $" + String.format("%.2f", u), color = W.Amber,
+                            style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
                 }
-                IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
-                    if (state.loadingList)
-                        CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = W.Amber)
-                }
-                Spacer(Modifier.width(2.dp))
-                OutlinedButton(onClick = onOpenAskAll, enabled = state.hasKey,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, W.Amber),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)) {
-                    Icon(Icons.Filled.ViewColumn, contentDescription = null, tint = W.Amber, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (state.conversations.isNotEmpty()) {
+                        TextButton(onClick = { vm.startSelecting() },
+                            contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Select", color = W.Muted) }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
+                        if (state.loadingList)
+                            CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
+                        else Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = W.Amber)
+                    }
                     Spacer(Modifier.width(4.dp))
-                    Text("Ask all", color = W.Amber, style = MaterialTheme.typography.labelMedium)
-                }
-                Spacer(Modifier.width(4.dp))
-                Button(onClick = onNew, colors = ButtonDefaults.buttonColors(containerColor = W.Amber),
-                    enabled = state.hasKey,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
-                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF1A1204), modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("New", color = Color(0xFF1A1204))
+                    OutlinedButton(onClick = onOpenAskAll, enabled = state.hasKey,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, W.Amber),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)) {
+                        Icon(Icons.Filled.ViewColumn, contentDescription = null, tint = W.Amber, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Ask all", color = W.Amber, style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Button(onClick = onNew, colors = ButtonDefaults.buttonColors(containerColor = W.Amber),
+                        enabled = state.hasKey,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+                        Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF1A1204), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("New", color = Color(0xFF1A1204))
+                    }
                 }
             }
         }

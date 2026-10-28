@@ -1,13 +1,18 @@
 package com.waide.mobile.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -85,6 +90,9 @@ fun SettingsScreen(
     var premiumMsg by remember { mutableStateOf<String?>(null) }
     var managingModels by remember { mutableStateOf(false) }
     var managingLocal by remember { mutableStateOf(false) }
+    // Accordion: which section is open (null = all collapsed). showAddServer reveals the add form.
+    var expanded by remember { mutableStateOf<String?>(null) }
+    var showAddServer by remember { mutableStateOf(false) }
 
     // The full-screen server-models manager (search, pull, delete, pick answering model
     // and image reader). Swaps in over Settings, same pattern the Server tab used before.
@@ -133,274 +141,271 @@ fun SettingsScreen(
         return
     }
 
+    if (expanded != null) BackHandler { expanded = null }   // back closes the open section
+
     Column(
         modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        Text("MACHINES", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "The servers the Server Chat tab can reach, each by its Tailscale address " +
-                "(http://100.x.y.z:11434). Add more as you set up more machines, then " +
-                "switch between them from the dropdown on the Server Chat tab.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-
-        servers.forEach { s ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(s.name, color = W.Text, style = MaterialTheme.typography.bodyLarge)
-                    Text(s.url, color = W.Muted, style = MaterialTheme.typography.labelSmall)
+        // ---- Machines ----
+        SettingsAccordion("Machines", expanded == "machines",
+            { expanded = if (expanded == "machines") null else "machines" }) {
+            Text(
+                "The servers the Server Chat tab can reach, each by its Tailscale address " +
+                    "(http://100.x.y.z:11434). Add more as you set up more machines, then " +
+                    "switch between them from the dropdown on the Server Chat tab.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(10.dp))
+            servers.forEach { s ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(s.name, color = W.Text, style = MaterialTheme.typography.bodyLarge)
+                        Text(s.url, color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = { onRemoveServer(s.id) }) { Text("Remove", color = W.Danger) }
                 }
-                TextButton(onClick = { onRemoveServer(s.id) }) { Text("Remove", color = W.Danger) }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (showAddServer) {
+                OutlinedTextField(
+                    value = newName, onValueChange = { newName = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("name, e.g. Shop PC", color = W.Muted) },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = newUrl, onValueChange = { newUrl = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("http://100.x.y.z:11434", color = W.Muted) },
+                    shape = RoundedCornerShape(4.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
+                )
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    Button(
+                        onClick = { onAddServer(newName, newUrl); newName = ""; newUrl = ""; showAddServer = false },
+                        enabled = newUrl.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
+                    ) { Text("Add machine") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { showAddServer = false; newName = ""; newUrl = "" }) {
+                        Text("Cancel", color = W.Muted)
+                    }
+                }
+            } else {
+                Button(
+                    onClick = { showAddServer = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+                ) { Text(if (servers.isEmpty()) "Add a server" else "Add another server") }
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-        Text("ADD A MACHINE", style = MaterialTheme.typography.labelSmall, color = W.Muted)
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = newName, onValueChange = { newName = it },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            placeholder = { Text("name, e.g. Shop PC", color = W.Muted) },
-            shape = RoundedCornerShape(4.dp),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
-        )
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = newUrl, onValueChange = { newUrl = it },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            placeholder = { Text("http://100.x.y.z:11434", color = W.Muted) },
-            shape = RoundedCornerShape(4.dp),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { onAddServer(newName, newUrl); newName = ""; newUrl = "" },
-            enabled = newUrl.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber, disabledContainerColor = W.SurfaceHi)
-        ) { Text("Add machine") }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("SERVER MODELS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "One place for the whole server side. The Server Chat tab and the Saved Chats " +
-                "tab both use the answering model and image reader you pick here. Search for, " +
-                "download, and delete models too.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-        Text("Answering model: ${serverState.selectedModel.ifBlank { "none set" }}",
-            color = W.Text, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(2.dp))
-        Text("Image reader: ${serverState.visionModel.ifBlank { "none set" }}",
-            color = W.Muted, style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { managingModels = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Manage server models") }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("PREMIUM AI", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Paid cloud models (Claude, GPT, Grok, and more) through OpenRouter. Your key " +
-                "is stored on your PC server, never on the phone, and all processing happens " +
-                "in the cloud. Get a key at openrouter.ai, then paste it here.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-        Text("OpenRouter key: ${if (premiumState.hasKey) "set" else "not set"}",
-            color = if (premiumState.hasKey) W.Text else W.Danger, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { premiumMsg = null; premiumKeyDialog = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text(if (premiumState.hasKey) "Change OpenRouter key" else "Set OpenRouter key") }
-        Spacer(Modifier.height(10.dp))
-        Text("Default model: ${premiumState.selectedModel.ifBlank { "none set" }.substringAfterLast('/')}",
-            color = W.Text, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(8.dp))
-        Row {
-            Button(
-                onClick = { premiumModelDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-            ) { Text("Choose default model") }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { premiumMsg = null; unhidePremiumDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = W.SurfaceHi)
-            ) { Text("Unhide all", color = W.Amber) }
-        }
-        premiumMsg?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = if (it.startsWith("Revealed") || it.startsWith("Saved")) W.Muted else W.Danger,
-                style = MaterialTheme.typography.labelMedium)
-        }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("SERVER", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(12.dp))
-
-        Slider2(
-            label = "Server context size",
-            value = serverCtx.toFloat(),
-            range = 2048f..65536f,
-            steps = 30,
-            display = "$serverCtx tokens",
-            help = "The server model's window for this session: your prompt plus the running conversation. It starts at 8,192 each time you open the app fresh. If a message needs more, the app asks before leaning harder on your PC, so you don't have to set this. Raise it here only if you'd rather do it yourself. Bigger uses more of the PC's memory."
-        ) { onServerCtxChange(it.toInt()) }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("SAVED CHATS (PRIVATE)", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Reveal everything hidden at once, so you enter your PIN a single time instead " +
-                "of unhiding one by one.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { unhideMsg = null; unhideDialog = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Unhide all conversations") }
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { unhideMsg = null; unhideAgentsDialog = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Unhide all agents") }
-        unhideMsg?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = if (it.startsWith("Revealed")) W.Muted else W.Danger,
-                style = MaterialTheme.typography.labelMedium)
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Text("The code that unlocks this tab. If you forget it, use Forgot password with " +
-            "your master reset code to set a new one. The master code never unlocks chats " +
-            "on its own and never changes.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { pwMsg = null; changePwDialog = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Change password") }
-        pwMsg?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = if (it.startsWith("Password")) W.Muted else W.Danger,
-                style = MaterialTheme.typography.labelMedium)
-        }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("LOCAL MODELS", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Models that run on the phone itself, for the Local Chat tab. Drop a .gguf file " +
-                "into your Downloads folder, then pick it here.",
-            color = W.Muted, style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-        Text("Loaded: ${loadedModelName.ifBlank { "none" }}",
-            color = W.Text, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { managingLocal = true },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Manage local models") }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("ENGINE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(12.dp))
-
-        Slider2(
-            label = "Phone context size",
-            value = settings.contextSize.toFloat(),
-            range = 1024f..16384f,
-            steps = 14,
-            display = "${settings.contextSize} tokens",
-            help = "For the on-phone Local Chat tab. How much conversation the local model can hold. Bigger uses more of the phone's RAM. Takes effect when you next load a model."
-        ) { onChange(settings.copy(contextSize = (it / 1024).toInt() * 1024)) }
-
-        Slider2(
-            label = "CPU threads",
-            value = settings.threads.toFloat(),
-            range = 2f..8f,
-            steps = 5,
-            display = "${settings.threads}",
-            help = "Four is the sweet spot on a Snapdragon. More is not always faster and drains the battery harder."
-        ) { onChange(settings.copy(threads = it.toInt())) }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("SAMPLING", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(12.dp))
-
-        Slider2(
-            label = "Temperature",
-            value = settings.temperature,
-            range = 0.1f..1.5f,
-            steps = 27,
-            display = String.format("%.2f", settings.temperature),
-            help = "Low is literal and repetitive. High is loose and creative."
-        ) { onChange(settings.copy(temperature = Math.round(it * 20) / 20f)) }
-
-        Slider2(
-            label = "Top P",
-            value = settings.topP,
-            range = 0.5f..1.0f,
-            steps = 9,
-            display = String.format("%.2f", settings.topP),
-            help = null
-        ) { onChange(settings.copy(topP = Math.round(it * 20) / 20f)) }
-
-        Spacer(Modifier.height(18.dp))
-        HorizontalDivider(color = W.Line)
-        Spacer(Modifier.height(18.dp))
-        Text("SYSTEM PROMPT", style = MaterialTheme.typography.labelSmall, color = W.Amber)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Standing instructions the model reads before every conversation. Applied when you start a new chat.",
-            color = W.Muted,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = system,
-            onValueChange = { system = it },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
-            placeholder = { Text("Leave blank to use the model's own default.", color = W.Muted) },
-            shape = RoundedCornerShape(4.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = W.Amber,
-                unfocusedBorderColor = W.Line
+        // ---- Server models ----
+        SettingsAccordion("Server models", expanded == "servermodels",
+            { expanded = if (expanded == "servermodels") null else "servermodels" }) {
+            Text(
+                "One place for the whole server side. The Server Chat tab and the Saved Chats " +
+                    "tab both use the answering model and image reader you pick here. Search for, " +
+                    "download, and delete models too.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
             )
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { onChange(settings.copy(systemPrompt = system)) },
-            colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
-        ) { Text("Save system prompt") }
+            Spacer(Modifier.height(10.dp))
+            Text("Answering model: ${serverState.selectedModel.ifBlank { "none set" }}",
+                color = W.Text, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(2.dp))
+            Text("Image reader: ${serverState.visionModel.ifBlank { "none set" }}",
+                color = W.Muted, style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { managingModels = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Manage server models") }
+        }
+
+        // ---- Premium AI (OpenRouter) ----
+        SettingsAccordion("Premium AI", expanded == "premium",
+            { expanded = if (expanded == "premium") null else "premium" }) {
+            Text(
+                "Paid cloud models (Claude, GPT, Grok, and more) through OpenRouter. Your key " +
+                    "is stored on your PC server, never on the phone, and all processing happens " +
+                    "in the cloud. Get a key at openrouter.ai, then paste it here.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(10.dp))
+            premiumState.usage?.let {
+                Text("Spend so far: $" + String.format("%.2f", it),
+                    color = W.Amber, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(6.dp))
+            }
+            Text("OpenRouter key: ${if (premiumState.hasKey) "set" else "not set"}",
+                color = if (premiumState.hasKey) W.Text else W.Danger, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { premiumMsg = null; premiumKeyDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text(if (premiumState.hasKey) "Change OpenRouter key" else "Set OpenRouter key") }
+            Spacer(Modifier.height(10.dp))
+            Text("Default model: ${premiumState.selectedModel.ifBlank { "none set" }.substringAfterLast('/')}",
+                color = W.Text, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Button(
+                    onClick = { premiumModelDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+                ) { Text("Choose default model") }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { premiumMsg = null; unhidePremiumDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = W.SurfaceHi)
+                ) { Text("Unhide all", color = W.Amber) }
+            }
+            premiumMsg?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = if (it.startsWith("Revealed") || it.startsWith("Saved")) W.Muted else W.Danger,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+
+        // ---- Server (context) ----
+        SettingsAccordion("Server", expanded == "server",
+            { expanded = if (expanded == "server") null else "server" }) {
+            Slider2(
+                label = "Server context size",
+                value = serverCtx.toFloat(),
+                range = 2048f..65536f,
+                steps = 30,
+                display = "$serverCtx tokens",
+                help = "The server model's window for this session: your prompt plus the running conversation. It starts at 8,192 each time you open the app fresh. If a message needs more, the app asks before leaning harder on your PC, so you don't have to set this. Raise it here only if you'd rather do it yourself. Bigger uses more of the PC's memory."
+            ) { onServerCtxChange(it.toInt()) }
+        }
+
+        // ---- Saved Chats (private) ----
+        SettingsAccordion("Saved Chats (private)", expanded == "saved",
+            { expanded = if (expanded == "saved") null else "saved" }) {
+            Text(
+                "Reveal everything hidden at once, so you enter your PIN a single time instead " +
+                    "of unhiding one by one.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { unhideMsg = null; unhideDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Unhide all conversations") }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { unhideMsg = null; unhideAgentsDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Unhide all agents") }
+            unhideMsg?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = if (it.startsWith("Revealed")) W.Muted else W.Danger,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("The code that unlocks this tab. If you forget it, use Forgot password with " +
+                "your master reset code to set a new one. The master code never unlocks chats " +
+                "on its own and never changes.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { pwMsg = null; changePwDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Change password") }
+            pwMsg?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = if (it.startsWith("Password")) W.Muted else W.Danger,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+
+        // ---- Local models (now holds all on-phone model tuning) ----
+        SettingsAccordion("Local models", expanded == "local",
+            { expanded = if (expanded == "local") null else "local" }) {
+            Text(
+                "Models that run on the phone itself, for the Local Chat tab. Drop a .gguf file " +
+                    "into your Downloads folder, then pick it here.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(10.dp))
+            Text("Loaded: ${loadedModelName.ifBlank { "none" }}",
+                color = W.Text, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { managingLocal = true },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Manage local models") }
+
+            Spacer(Modifier.height(18.dp))
+            Text("ENGINE", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+            Spacer(Modifier.height(12.dp))
+            Slider2(
+                label = "Phone context size",
+                value = settings.contextSize.toFloat(),
+                range = 1024f..16384f,
+                steps = 14,
+                display = "${settings.contextSize} tokens",
+                help = "For the on-phone Local Chat tab. How much conversation the local model can hold. Bigger uses more of the phone's RAM. Takes effect when you next load a model."
+            ) { onChange(settings.copy(contextSize = (it / 1024).toInt() * 1024)) }
+            Slider2(
+                label = "CPU threads",
+                value = settings.threads.toFloat(),
+                range = 2f..8f,
+                steps = 5,
+                display = "${settings.threads}",
+                help = "Four is the sweet spot on a Snapdragon. More is not always faster and drains the battery harder."
+            ) { onChange(settings.copy(threads = it.toInt())) }
+
+            Spacer(Modifier.height(18.dp))
+            Text("SAMPLING", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+            Spacer(Modifier.height(12.dp))
+            Slider2(
+                label = "Temperature",
+                value = settings.temperature,
+                range = 0.1f..1.5f,
+                steps = 27,
+                display = String.format("%.2f", settings.temperature),
+                help = "Low is literal and repetitive. High is loose and creative."
+            ) { onChange(settings.copy(temperature = Math.round(it * 20) / 20f)) }
+            Slider2(
+                label = "Top P",
+                value = settings.topP,
+                range = 0.5f..1.0f,
+                steps = 9,
+                display = String.format("%.2f", settings.topP),
+                help = null
+            ) { onChange(settings.copy(topP = Math.round(it * 20) / 20f)) }
+
+            Spacer(Modifier.height(18.dp))
+            Text("SYSTEM PROMPT", style = MaterialTheme.typography.labelSmall, color = W.Amber)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Standing instructions the model reads before every conversation. Applied when you start a new chat.",
+                color = W.Muted, style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = system,
+                onValueChange = { system = it },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                placeholder = { Text("Leave blank to use the model's own default.", color = W.Muted) },
+                shape = RoundedCornerShape(4.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line)
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { onChange(settings.copy(systemPrompt = system)) },
+                colors = ButtonDefaults.buttonColors(containerColor = W.Amber)
+            ) { Text("Save system prompt") }
+        }
 
         Spacer(Modifier.height(40.dp))
 
@@ -472,6 +477,33 @@ fun SettingsScreen(
                 onCancel = { unhidePremiumDialog = false }
             )
         }
+    }
+}
+
+/** A collapsible settings section: tap the header (or Android back) to expand/collapse. */
+@Composable
+private fun SettingsAccordion(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall,
+                color = if (expanded) W.Amber else W.Text, modifier = Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand", tint = W.Amber
+            )
+        }
+        if (expanded) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) { content() }
+        }
+        HorizontalDivider(color = W.Line)
     }
 }
 

@@ -168,12 +168,14 @@ fun ConversationsScreen(
       LaunchedEffect(state.locked) {
           if (!state.locked) {
               showWelcome = true
-              kotlinx.coroutines.delay(4000)
+              kotlinx.coroutines.delay(3000)
               showWelcome = false
           }
       }
       if (showWelcome) {
-          Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
+          // Tap anywhere to dismiss it instantly.
+          Box(Modifier.fillMaxSize().background(Color(0xCC000000)).clickable { showWelcome = false },
+              contentAlignment = Alignment.Center) {
               Text("Welcome Wade", color = W.Amber, style = MaterialTheme.typography.headlineMedium)
           }
       }
