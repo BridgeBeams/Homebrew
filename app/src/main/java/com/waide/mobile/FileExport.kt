@@ -1,10 +1,14 @@
 package com.waide.mobile
 
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.text.Layout
+import android.text.SpannableStringBuilder
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -53,36 +57,156 @@ private fun zipBytes(entries: List<Pair<String, String>>): ByteArray {
     return baos.toByteArray()
 }
 
-// ---------------------------------------------------------------- PDF
-internal fun buildTextPdf(text: String): ByteArray {
-    val pageW = 612; val pageH = 792; val margin = 36
-    val contentW = pageW - 2 * margin
-    val contentH = pageH - 2 * margin
-    val tp = TextPaint().apply { color = Color.BLACK; textSize = 11f; isAntiAlias = true }
-    val content: CharSequence = if (text.isBlank()) " " else text
-    @Suppress("DEPRECATION")
-    val layout = StaticLayout(content, tp, contentW, Layout.Alignment.ALIGN_NORMAL, 1.15f, 0f, false)
-    val doc = PdfDocument()
-    var startLine = 0
-    var pageNum = 1
-    while (startLine < layout.lineCount) {
-        val pageTop = layout.getLineTop(startLine)
-        var endLine = startLine
-        while (endLine < layout.lineCount && layout.getLineBottom(endLine) - pageTop <= contentH) endLine++
-        if (endLine == startLine) endLine = startLine + 1
-        val info = PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).create()
-        val page = doc.startPage(info)
-        val c = page.canvas
-        c.save()
-        c.translate(margin.toFloat(), (margin - pageTop).toFloat())
-        c.clipRect(0f, pageTop.toFloat(), contentW.toFloat(), layout.getLineBottom(endLine - 1).toFloat())
-        layout.draw(c)
-        c.restore()
-        doc.finishPage(page)
-        startLine = endLine
-        pageNum++
+// ------------------------------------------------- shared markdown model
+private enum class BT { H1, H2, H3, PARA, BULLET, NUMBER, CODE, QUOTE }
+private class MdBlock(val type: BT, val text: String, val marker: String = "")
+
+/** One inline run of text with its styles. */
+private class Tok(val text: String, val bold: Boolean, val italic: Boolean, val code: Boolean)
+
+private val INLINE = Regex("\\*\\*(.+?)\\*\\*|`([^`]+?)`|\\*(.+?)\\*|_(.+?)_")
+
+private fun inlineTokens(s: String): List<Tok> {
+    val toks = ArrayList<Tok>()
+    var i = 0
+    for (m in INLINE.findAll(s)) {
+        if (m.range.first > i) toks.add(Tok(s.substring(i, m.range.first), false, false, false))
+        when {
+            m.groupValues[1].isNotEmpty() -> toks.add(Tok(m.groupValues[1], true, false, false))
+            m.groupValues[2].isNotEmpty() -> toks.add(Tok(m.groupValues[2], false, false, true))
+            m.groupValues[3].isNotEmpty() -> toks.add(Tok(m.groupValues[3], false, true, false))
+            m.groupValues[4].isNotEmpty() -> toks.add(Tok(m.groupValues[4], false, true, false))
+        }
+        i = m.range.last + 1
     }
-    if (layout.lineCount == 0) doc.finishPage(doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, 1).create()))
+    if (i < s.length) toks.add(Tok(s.substring(i), false, false, false))
+    return toks
+}
+
+/** Split a message into markdown blocks (headings, paragraphs, lists, code, quotes). */
+private fun parseMarkdown(text: String): List<MdBlock> {
+    val lines = text.replace("\r\n", "\n").split("\n")
+    val blocks = ArrayList<MdBlock>()
+    val para = StringBuilder()
+    fun flush() { if (para.isNotBlank()) blocks.add(MdBlock(BT.PARA, para.toString().trim())); para.setLength(0) }
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i].trimEnd()
+        val t = line.trimStart()
+        when {
+            line.isBlank() -> flush()
+            t.startsWith("```") -> {
+                flush()
+                val sb = StringBuilder(); i++
+                while (i < lines.size && !lines[i].trimStart().startsWith("```")) { sb.append(lines[i]).append("\n"); i++ }
+                blocks.add(MdBlock(BT.CODE, sb.toString().trimEnd('\n')))
+            }
+            Regex("^(-{3,}|\\*{3,}|_{3,})$").matches(t) -> flush()
+            t.startsWith("### ") -> { flush(); blocks.add(MdBlock(BT.H3, t.substring(4))) }
+            t.startsWith("## ") -> { flush(); blocks.add(MdBlock(BT.H2, t.substring(3))) }
+            t.startsWith("# ") -> { flush(); blocks.add(MdBlock(BT.H1, t.substring(2))) }
+            Regex("^[-*+]\\s+").containsMatchIn(t) -> { flush(); blocks.add(MdBlock(BT.BULLET, t.replaceFirst(Regex("^[-*+]\\s+"), ""))) }
+            Regex("^\\d+\\.\\s+").containsMatchIn(t) -> {
+                flush()
+                val num = Regex("^(\\d+)\\.\\s+").find(t)!!.groupValues[1]
+                blocks.add(MdBlock(BT.NUMBER, t.replaceFirst(Regex("^\\d+\\.\\s+"), ""), num))
+            }
+            t.startsWith("> ") -> { flush(); blocks.add(MdBlock(BT.QUOTE, t.substring(2))) }
+            else -> { if (para.isNotEmpty()) para.append(" "); para.append(t) }
+        }
+        i++
+    }
+    flush()
+    return blocks
+}
+
+// ------------------------------------------------- PDF (markdown-rendered)
+private fun inlineSpannable(s: String): CharSequence {
+    val out = SpannableStringBuilder()
+    for (tk in inlineTokens(s)) {
+        val start = out.length
+        out.append(tk.text)
+        if (tk.bold) out.setSpan(StyleSpan(Typeface.BOLD), start, out.length, 0)
+        if (tk.italic) out.setSpan(StyleSpan(Typeface.ITALIC), start, out.length, 0)
+        if (tk.code) out.setSpan(TypefaceSpan("monospace"), start, out.length, 0)
+    }
+    return out
+}
+
+private class PdfStyle(val paint: TextPaint, val indent: Int, val above: Int, val mult: Float, val body: CharSequence) {
+    operator fun component1() = paint
+    operator fun component2() = indent
+    operator fun component3() = above
+    operator fun component4() = mult
+    operator fun component5() = body
+}
+
+internal fun buildTextPdf(text: String): ByteArray {
+    val pageW = 612; val pageH = 792; val margin = 54
+    val contentW = pageW - 2 * margin
+    val bottom = pageH - margin
+    val ink = Color.rgb(0x1a, 0x1a, 0x1a)
+    val sans = Typeface.SANS_SERIF
+    val bold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+    val italic = Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC)
+    fun paint(size: Float, tf: Typeface, color: Int) =
+        TextPaint().apply { this.color = color; textSize = size; isAntiAlias = true; typeface = tf }
+    val pBody = paint(11.5f, sans, ink)
+    val pH1 = paint(21f, bold, ink)
+    val pH2 = paint(16.5f, bold, ink)
+    val pH3 = paint(13.5f, bold, ink)
+    val pCode = paint(10f, Typeface.MONOSPACE, Color.rgb(0x33, 0x33, 0x33))
+    val pQuote = paint(11.5f, italic, Color.rgb(0x55, 0x55, 0x55))
+
+    val blocks = if (text.isBlank()) listOf(MdBlock(BT.PARA, " ")) else parseMarkdown(text)
+
+    val doc = PdfDocument()
+    var pageNum = 1
+    var page = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).create())
+    var canvas = page.canvas
+    var y = margin
+    fun newPage() {
+        doc.finishPage(page); pageNum++
+        page = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).create())
+        canvas = page.canvas; y = margin
+    }
+
+    for (b in blocks) {
+        val (paint, indent, above, mult, body) = when (b.type) {
+            BT.H1 -> PdfStyle(pH1, 0, 16, 1.1f, inlineSpannable(b.text))
+            BT.H2 -> PdfStyle(pH2, 0, 13, 1.1f, inlineSpannable(b.text))
+            BT.H3 -> PdfStyle(pH3, 0, 11, 1.1f, inlineSpannable(b.text))
+            BT.CODE -> PdfStyle(pCode, 14, 8, 1.2f, b.text)
+            BT.QUOTE -> PdfStyle(pQuote, 16, 7, 1.3f, inlineSpannable(b.text))
+            BT.BULLET -> PdfStyle(pBody, 16, 3, 1.3f, SpannableStringBuilder("•  ").append(inlineSpannable(b.text)))
+            BT.NUMBER -> PdfStyle(pBody, 16, 3, 1.3f, SpannableStringBuilder("${b.marker}.  ").append(inlineSpannable(b.text)))
+            BT.PARA -> PdfStyle(pBody, 0, 7, 1.3f, inlineSpannable(b.text))
+        }
+        y += above
+        val w = contentW - indent
+        @Suppress("DEPRECATION")
+        val layout = StaticLayout(body, paint, w, Layout.Alignment.ALIGN_NORMAL, mult, 0f, false)
+        var lineStart = 0
+        while (lineStart < layout.lineCount) {
+            val top = layout.getLineTop(lineStart)
+            val firstH = layout.getLineBottom(lineStart) - top
+            if (y + firstH > bottom && y > margin) newPage()
+            val avail = bottom - y
+            var lineEnd = lineStart
+            while (lineEnd < layout.lineCount && layout.getLineBottom(lineEnd) - top <= avail) lineEnd++
+            if (lineEnd == lineStart) lineEnd = lineStart + 1
+            val sliceBottom = layout.getLineBottom(lineEnd - 1)
+            canvas.save()
+            canvas.translate((margin + indent).toFloat(), (y - top).toFloat())
+            canvas.clipRect(0f, top.toFloat(), w.toFloat(), sliceBottom.toFloat())
+            layout.draw(canvas)
+            canvas.restore()
+            y += sliceBottom - top
+            lineStart = lineEnd
+            if (lineStart < layout.lineCount) newPage()
+        }
+    }
+    doc.finishPage(page)
     val baos = ByteArrayOutputStream()
     doc.writeTo(baos)
     doc.close()
@@ -90,9 +214,43 @@ internal fun buildTextPdf(text: String): ByteArray {
 }
 
 // ---------------------------------------------------------------- DOCX
+/** Inline runs for a line of markdown. sz is half-points (23 = 11.5pt). */
+private fun docxRuns(s: String, sz: Int, bold: Boolean, italic: Boolean, mono: Boolean): String {
+    val toks = inlineTokens(s)
+    if (toks.isEmpty()) return "<w:r><w:rPr><w:sz w:val=\"$sz\"/><w:szCs w:val=\"$sz\"/></w:rPr><w:t xml:space=\"preserve\"></w:t></w:r>"
+    val sb = StringBuilder()
+    for (tk in toks) {
+        sb.append("<w:r><w:rPr>")
+        if (bold || tk.bold) sb.append("<w:b/>")
+        if (italic || tk.italic) sb.append("<w:i/>")
+        if (mono || tk.code) sb.append("<w:rFonts w:ascii=\"Consolas\" w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>")
+        sb.append("<w:sz w:val=\"$sz\"/><w:szCs w:val=\"$sz\"/></w:rPr>")
+        sb.append("<w:t xml:space=\"preserve\">").append(xmlEsc(tk.text)).append("</w:t></w:r>")
+    }
+    return sb.toString()
+}
+
+private fun docxPara(runs: String, before: Int, after: Int, indent: Int): String {
+    val ind = if (indent > 0) "<w:ind w:left=\"$indent\"/>" else ""
+    return "<w:p><w:pPr><w:spacing w:before=\"$before\" w:after=\"$after\"/>$ind</w:pPr>$runs</w:p>"
+}
+
+private fun bulletPrefix(s: String): String =
+    "<w:r><w:rPr><w:sz w:val=\"23\"/><w:szCs w:val=\"23\"/></w:rPr><w:t xml:space=\"preserve\">${xmlEsc(s)}</w:t></w:r>"
+
 internal fun buildDocx(text: String): ByteArray {
-    val body = (if (text.isBlank()) listOf("") else text.split("\n")).joinToString("") { line ->
-        "<w:p><w:r><w:t xml:space=\"preserve\">${xmlEsc(line)}</w:t></w:r></w:p>"
+    val blocks = if (text.isBlank()) listOf(MdBlock(BT.PARA, "")) else parseMarkdown(text)
+    val body = buildString {
+        for (b in blocks) when (b.type) {
+            BT.H1 -> append(docxPara(docxRuns(b.text, 42, true, false, false), 240, 120, 0))
+            BT.H2 -> append(docxPara(docxRuns(b.text, 33, true, false, false), 200, 100, 0))
+            BT.H3 -> append(docxPara(docxRuns(b.text, 27, true, false, false), 160, 80, 0))
+            BT.CODE -> for (ln in b.text.split("\n")) append(docxPara(docxRuns(ln, 20, false, false, true), 0, 0, 360))
+            BT.QUOTE -> append(docxPara(docxRuns(b.text, 23, false, true, false), 40, 80, 360))
+            BT.BULLET -> append(docxPara(bulletPrefix("•  ") + docxRuns(b.text, 23, false, false, false), 0, 40, 360))
+            BT.NUMBER -> append(docxPara(bulletPrefix("${b.marker}.  ") + docxRuns(b.text, 23, false, false, false), 0, 40, 360))
+            BT.PARA -> append(docxPara(docxRuns(b.text, 23, false, false, false), 0, 100, 0))
+        }
     }
     val document = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>$body<w:sectPr/></w:body></w:document>"""
     val contentTypes = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"""
