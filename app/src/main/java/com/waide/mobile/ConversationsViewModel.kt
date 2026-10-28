@@ -461,6 +461,27 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Save a message's text to the phone's Downloads as a file. */
+    fun saveTextToFile(text: String, filename: String) {
+        val name = filename.trim().ifBlank { "waide-note.md" }
+        val mime = when {
+            name.endsWith(".md", true) -> "text/markdown"
+            name.endsWith(".json", true) -> "application/json"
+            name.endsWith(".csv", true) -> "text/csv"
+            name.endsWith(".html", true) || name.endsWith(".htm", true) -> "text/html"
+            name.endsWith(".xml", true) -> "application/xml"
+            else -> "text/plain"
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { saveToDownloads(name, mime, text.toByteArray(Charsets.UTF_8)) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
+                               else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
+            }
+        }
+    }
+
     private fun saveToDownloads(name: String, mime: String, bytes: ByteArray): String {
         val ctx = getApplication<Application>()
         val safe = name.ifBlank { "waide-file" }
