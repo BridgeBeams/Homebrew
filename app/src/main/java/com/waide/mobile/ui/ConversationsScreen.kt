@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
@@ -67,6 +68,7 @@ import com.waide.mobile.ConvSummary
 @Composable
 fun ConversationsScreen(
     state: ConvState,
+    vm: com.waide.mobile.ConversationsViewModel,
     onUnlock: (String) -> Unit,
     onRefreshList: () -> Unit,
     onOpen: (String) -> Unit,
@@ -132,7 +134,7 @@ fun ConversationsScreen(
         }
         if (section == 0) {
             if (state.openId == null)
-                ConvList(state, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
+                ConvList(state, vm, onRefreshList, onOpen, onNew, onRename, onDeleteConv,
                     onHide, onRequestUnhide, onSubmitUnhide, onCancelUnhide, onSearch, onClearSearch,
                     Modifier.weight(1f))
             else
@@ -250,6 +252,7 @@ private fun PinGate(state: ConvState, onUnlock: (String) -> Unit, modifier: Modi
 @Composable
 private fun ConvList(
     state: ConvState,
+    vm: com.waide.mobile.ConversationsViewModel,
     onRefresh: () -> Unit,
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
@@ -266,28 +269,65 @@ private fun ConvList(
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renameFor by remember { mutableStateOf<ConvSummary?>(null) }
     var deleteFor by remember { mutableStateOf<ConvSummary?>(null) }
+    var moveFor by remember { mutableStateOf<ConvSummary?>(null) }        // single-conv project picker
+    var bulkPicker by remember { mutableStateOf(false) }                 // multi-select project picker
+    var newProjectOpen by remember { mutableStateOf(false) }             // create project from + chip
+    var editProject by remember { mutableStateOf<ProjItem?>(null) }      // chip long-press menu
+    var renameProjectFor by remember { mutableStateOf<ProjItem?>(null) }
+    var deleteProjectFor by remember { mutableStateOf<ProjItem?>(null) }
     val searchMode = state.query.isNotBlank()
+    val projItems = state.projects.map { ProjItem(it.id, it.name) }
 
     Column(modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Conversations", style = MaterialTheme.typography.titleMedium, color = W.Amber,
-                modifier = Modifier.weight(1f))
-            IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
-                if (state.loadingList)
-                    CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
-                else Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = W.Amber)
+        // header: normal, or the selection action bar
+        if (state.selecting) {
+            Row(
+                Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("${state.selected.size} selected", color = W.Amber,
+                    style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { if (state.selected.isNotEmpty()) bulkPicker = true },
+                    enabled = state.selected.isNotEmpty()) { Text("Add to project", color = W.Amber) }
+                TextButton(onClick = { vm.cancelSelecting() }) { Text("Cancel", color = W.Muted) }
             }
-            Spacer(Modifier.width(4.dp))
-            Button(onClick = onNew, colors = ButtonDefaults.buttonColors(containerColor = W.Amber),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
-                Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF1A1204),
-                    modifier = Modifier.size(18.dp))
+        } else {
+            Row(
+                Modifier.fillMaxWidth().background(W.Surface).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Conversations", style = MaterialTheme.typography.titleMedium, color = W.Amber,
+                    modifier = Modifier.weight(1f))
+                if (state.conversations.isNotEmpty()) {
+                    TextButton(onClick = { vm.startSelecting() },
+                        contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Select", color = W.Muted) }
+                }
+                IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
+                    if (state.loadingList)
+                        CircularProgressIndicator(Modifier.size(18.dp), color = W.Amber, strokeWidth = 2.dp)
+                    else Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = W.Amber)
+                }
                 Spacer(Modifier.width(4.dp))
-                Text("New", color = Color(0xFF1A1204))
+                Button(onClick = onNew, colors = ButtonDefaults.buttonColors(containerColor = W.Amber),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF1A1204),
+                        modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("New", color = Color(0xFF1A1204))
+                }
             }
+        }
+
+        // project filter chips (hidden while searching)
+        if (!searchMode) {
+            ProjectChipsRow(
+                projects = projItems,
+                filter = state.projectFilter,
+                onFilter = { vm.setProjectFilter(it) },
+                onNewProject = { newProjectOpen = true },
+                onEditProject = { editProject = it }
+            )
+            HorizontalDivider(color = W.Line)
         }
 
         // keyword search box
@@ -353,54 +393,89 @@ private fun ConvList(
                     }
                 }
             }
-        } else if (state.conversations.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (state.loadingList) "Loading..." else "No conversations yet. Tap New to start one.",
-                    color = W.Muted, textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 40.dp)
-                )
-            }
         } else {
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                items(state.conversations) { c ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickable { if (c.hidden) onRequestUnhide(c.id) else onOpen(c.id) }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.title, color = if (c.hidden) W.Muted else W.Text,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(2.dp))
-                            Text("${fmtTime(c.updated)}  ·  ${c.count} messages",
-                                color = W.Muted, style = MaterialTheme.typography.labelSmall)
-                        }
-                        // Eye = visible (tap to hide). Eye-slash = hidden (tap to reveal with PIN).
-                        IconButton(onClick = { if (c.hidden) onRequestUnhide(c.id) else onHide(c.id) }) {
-                            Icon(
-                                if (c.hidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = if (c.hidden) "Reveal" else "Hide",
-                                tint = if (c.hidden) W.Amber else W.Muted
-                            )
-                        }
-                        Box {
-                            IconButton(onClick = { menuFor = c.id }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "Options", tint = W.Muted)
-                            }
-                            DropdownMenu(expanded = menuFor == c.id, onDismissRequest = { menuFor = null }) {
-                                if (!c.hidden) {
-                                    DropdownMenuItem(text = { Text("Rename", color = W.Text) },
-                                        onClick = { renameFor = c; menuFor = null })
+            val shown = state.conversations.filter { matchesFilter(it, state.projectFilter) }
+            if (shown.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        when {
+                            state.loadingList -> "Loading..."
+                            state.conversations.isEmpty() -> "No conversations yet. Tap New to start one."
+                            else -> "Nothing in this view yet."
+                        },
+                        color = W.Muted, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 40.dp)
+                    )
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                    items(shown) { c ->
+                        val isSel = state.selected.contains(c.id)
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    if (state.selecting) vm.toggleSelected(c.id)
+                                    else if (c.hidden) onRequestUnhide(c.id) else onOpen(c.id)
                                 }
-                                DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
-                                    onClick = { deleteFor = c; menuFor = null })
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (state.selecting) {
+                                Checkbox(
+                                    checked = isSel, onCheckedChange = { vm.toggleSelected(c.id) },
+                                    colors = CheckboxDefaults.colors(checkedColor = W.Amber, uncheckedColor = W.Muted)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (c.pinned && !state.selecting) {
+                                        Icon(Icons.Filled.PushPin, contentDescription = "Pinned", tint = W.Amber,
+                                            modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(c.title, color = if (c.hidden) W.Muted else W.Text,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Spacer(Modifier.height(2.dp))
+                                Text("${fmtTime(c.updated)}  ·  ${c.count} messages",
+                                    color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                            }
+                            if (!state.selecting) {
+                                // Eye = visible (tap to hide). Eye-slash = hidden (tap to reveal with PIN).
+                                IconButton(onClick = { if (c.hidden) onRequestUnhide(c.id) else onHide(c.id) }) {
+                                    Icon(
+                                        if (c.hidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = if (c.hidden) "Reveal" else "Hide",
+                                        tint = if (c.hidden) W.Amber else W.Muted
+                                    )
+                                }
+                                Box {
+                                    IconButton(onClick = { menuFor = c.id }) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "Options", tint = W.Muted)
+                                    }
+                                    DropdownMenu(expanded = menuFor == c.id, onDismissRequest = { menuFor = null }) {
+                                        if (!c.hidden) {
+                                            DropdownMenuItem(text = { Text(if (c.pinned) "Unpin" else "Pin to top", color = W.Text) },
+                                                onClick = { vm.togglePin(c.id, !c.pinned); menuFor = null })
+                                            DropdownMenuItem(text = { Text("Rename", color = W.Text) },
+                                                onClick = { renameFor = c; menuFor = null })
+                                            DropdownMenuItem(text = { Text(if (c.project.isBlank()) "Add to project" else "Move to project", color = W.Text) },
+                                                onClick = { moveFor = c; menuFor = null })
+                                            if (c.project.isNotBlank()) {
+                                                DropdownMenuItem(text = { Text("Remove from project", color = W.Text) },
+                                                    onClick = { vm.moveToProject(c.id, ""); menuFor = null })
+                                            }
+                                        }
+                                        DropdownMenuItem(text = { Text("Delete", color = W.Danger) },
+                                            onClick = { deleteFor = c; menuFor = null })
+                                    }
+                                }
                             }
                         }
+                        HorizontalDivider(color = W.Line)
                     }
-                    HorizontalDivider(color = W.Line)
                 }
             }
         }
@@ -432,6 +507,63 @@ private fun ConvList(
     state.unhideTarget?.let {
         UnhidePinDialog(state.unhideError, onSubmitUnhide, onCancelUnhide)
     }
+
+    // ---- project dialogs ----
+    moveFor?.let { c ->
+        ProjectPickerDialog(
+            projects = projItems,
+            heading = "Add \"${c.title}\" to",
+            showRemove = c.project.isNotBlank(),
+            onPick = { pid -> vm.moveToProject(c.id, pid); moveFor = null },
+            onCreate = { name -> vm.createProject(name) { newId -> if (newId != null) vm.moveToProject(c.id, newId) }; moveFor = null },
+            onRemove = { vm.moveToProject(c.id, ""); moveFor = null },
+            onDismiss = { moveFor = null }
+        )
+    }
+    if (bulkPicker) {
+        ProjectPickerDialog(
+            projects = projItems,
+            heading = "Add ${state.selected.size} chats to",
+            showRemove = false,
+            onPick = { pid -> vm.assignSelectedToProject(pid); bulkPicker = false },
+            onCreate = { name -> vm.createProjectForSelected(name); bulkPicker = false },
+            onRemove = {},
+            onDismiss = { bulkPicker = false }
+        )
+    }
+    if (newProjectOpen) {
+        ProjectNameDialog("New project", "", "Create",
+            onConfirm = { name -> vm.createProject(name); newProjectOpen = false },
+            onDismiss = { newProjectOpen = false })
+    }
+    editProject?.let { p ->
+        ProjectEditDialog(p,
+            onRename = { renameProjectFor = p; editProject = null },
+            onDelete = { deleteProjectFor = p; editProject = null },
+            onDismiss = { editProject = null })
+    }
+    renameProjectFor?.let { p ->
+        ProjectNameDialog("Rename project", p.name, "Save",
+            onConfirm = { name -> vm.renameProject(p.id, name); renameProjectFor = null },
+            onDismiss = { renameProjectFor = null })
+    }
+    deleteProjectFor?.let { p ->
+        AlertDialog(
+            onDismissRequest = { deleteProjectFor = null },
+            confirmButton = { TextButton(onClick = { vm.deleteProject(p.id); deleteProjectFor = null }) { Text("Delete", color = W.Danger) } },
+            dismissButton = { TextButton(onClick = { deleteProjectFor = null }) { Text("Cancel", color = W.Muted) } },
+            title = { Text("Delete project?", color = W.Text) },
+            text = { Text("Deletes the \"${p.name}\" project. Its conversations are kept and moved back to Unfiled.", color = W.Muted) },
+            containerColor = W.Surface
+        )
+    }
+}
+
+/** True if a conversation belongs in the current project filter view. */
+private fun matchesFilter(c: ConvSummary, filter: String): Boolean = when (filter) {
+    "" -> true
+    com.waide.mobile.UNFILED_FILTER -> c.project.isBlank()
+    else -> c.project == filter
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
