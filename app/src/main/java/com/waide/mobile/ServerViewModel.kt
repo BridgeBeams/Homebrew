@@ -44,7 +44,8 @@ data class ServerState(
     val visionModel: String = "",        // model used to read images; "" = not chosen yet
     val pendingImageB64: String? = null, // image attached and waiting to be sent
     val visionBusy: Boolean = false,     // the vision model is reading the image right now
-    val visionPickerOpen: Boolean = false
+    val visionPickerOpen: Boolean = false,
+    val filesMsg: String? = null         // "Saved ... to Downloads" feedback after an export
 )
 
 /**
@@ -57,6 +58,31 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     private val store = ModelStore(app)
     private val _state = MutableStateFlow(ServerState())
     val state: StateFlow<ServerState> = _state.asStateFlow()
+
+    // ---------------- file export (Download as PDF/Word/Excel/... and whole-chat save) ----------------
+    fun dismissFilesMsg() { _state.value = _state.value.copy(filesMsg = null) }
+
+    /** Save any text to Downloads; the extension in [filename] decides the format. Prefers the
+     *  PC server's renderer, falls back to the on-device renderer when it isn't reachable. */
+    fun saveText(text: String, filename: String) {
+        val app = getApplication<Application>()
+        val b = ConversationsClient.baseFrom(serverUrl())
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { Exporter.saveText(app, b, text, filename) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
+                               else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
+            }
+        }
+    }
+
+    /** Save the whole current conversation as one document. */
+    fun saveConversation(filename: String) {
+        val turns = _state.value.messages.map { it.role to it.text }
+        if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
+        saveText(Exporter.transcript(turns), filename)
+    }
 
     private var genJob: Job? = null
 

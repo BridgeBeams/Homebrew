@@ -29,7 +29,8 @@ data class ChatState(
     val tokensPerSecond: Float = 0f,
     val contextUsed: Int = 0,
     val contextSize: Int = 0,   // the loaded model's context ceiling (from Settings)
-    val error: String? = null
+    val error: String? = null,
+    val filesMsg: String? = null   // "Saved ... to Downloads" feedback after an export
 )
 
 // How well a given model file is expected to run on THIS phone, from its size vs RAM.
@@ -69,6 +70,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
+
+    // ---------------- file export (Download as PDF/Word/Excel/... and whole-chat save) ----------------
+    private fun exportBase(): String {
+        val servers = store.loadServers()
+        val active = store.getActiveServerId().ifBlank { servers.firstOrNull()?.id ?: "" }
+        val url = servers.firstOrNull { it.id == active }?.url ?: ""
+        return ConversationsClient.baseFrom(url)
+    }
+
+    fun dismissFilesMsg() { _state.value = _state.value.copy(filesMsg = null) }
+
+    /** Save any text to Downloads; the extension in [filename] decides the format. Prefers the
+     *  PC server's renderer, falls back to the on-device renderer when it isn't reachable. */
+    fun saveText(text: String, filename: String) {
+        val app = getApplication<Application>()
+        val b = exportBase()
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { Exporter.saveText(app, b, text, filename) }
+            withContext(Dispatchers.Main) {
+                _state.value = _state.value.copy(
+                    filesMsg = if (r.isSuccess) "Saved \"${r.getOrNull()}\" to Downloads."
+                               else (r.exceptionOrNull()?.message ?: "Couldn't save file."))
+            }
+        }
+    }
+
+    /** Save the whole current conversation as one document. */
+    fun saveConversation(filename: String) {
+        val turns = _state.value.messages.map { it.role to it.text }
+        if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
+        saveText(Exporter.transcript(turns), filename)
+    }
 
     private val _settings = MutableStateFlow(store.load())
     val settings: StateFlow<WaideSettings> = _settings.asStateFlow()

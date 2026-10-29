@@ -6,10 +6,12 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,6 +29,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.waide.mobile.smartTextFile
+import com.waide.mobile.suggestFileName
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -59,11 +65,18 @@ fun ServerScreen(
     onDeclineBump: () -> Unit = {},
     onImagePicked: (Uri) -> Unit = {},
     onClearImage: () -> Unit = {},
+    onSaveMessage: (String, String) -> Unit = { _, _ -> },
+    onSaveConversation: (String) -> Unit = {},
+    onDismissFilesMsg: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var draft by remember { mutableStateOf("") }
     var machineMenu by remember { mutableStateOf(false) }
     var zoomB64 by remember { mutableStateOf<String?>(null) }   // image tapped for full screen
+    var downloadFor by remember { mutableStateOf<String?>(null) }        // message text to export
+    var saveCustomFor by remember { mutableStateOf<String?>(null) }      // message text, custom name
+    var convDownload by remember { mutableStateOf(false) }               // whole-chat format picker
+    var convCustom by remember { mutableStateOf(false) }                 // whole-chat custom name
     val listState = rememberLazyListState()
     val streamingText = state.streaming
     val activeServer = state.servers.firstOrNull { it.id == state.activeServerId }
@@ -137,6 +150,10 @@ fun ServerScreen(
                     modifier = Modifier.weight(1f)
                 )
                 if (state.messages.isNotEmpty()) {
+                    TextButton(onClick = { convDownload = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                        Text("Save", color = W.Amber)
+                    }
                     TextButton(onClick = onClear, enabled = !state.busy,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
                         Text("Clear", color = W.Muted)
@@ -167,7 +184,7 @@ fun ServerScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(state.messages) { m -> SrvBubble(m, onImageTap = { zoomB64 = it }) }
+                items(state.messages) { m -> SrvBubble(m, onImageTap = { zoomB64 = it }, onDownload = { downloadFor = m.text }) }
                 if (streamingText != null) item {
                     val t = if (state.visionBusy) "reading image..." else streamingText.ifBlank { "..." }
                     SrvBubble(Message("assistant", t))
@@ -176,6 +193,11 @@ fun ServerScreen(
         }
 
         state.error?.let { ConnErrorBar(it) }
+        state.filesMsg?.let {
+            Text(it, color = W.Amber, style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.fillMaxWidth().background(W.SurfaceHi)
+                    .clickable { onDismissFilesMsg() }.padding(12.dp))
+        }
 
         HorizontalDivider(color = W.Line)
         Column(Modifier.background(W.Surface).imePadding()) {
@@ -312,6 +334,44 @@ fun ServerScreen(
             }
         }
     }
+
+    // ---- download dialogs ----
+    downloadFor?.let { text ->
+        FormatChooserDialog(
+            onPdf = { onSaveMessage(text, suggestFileName(text) + ".pdf"); downloadFor = null },
+            onDocx = { onSaveMessage(text, suggestFileName(text) + ".docx"); downloadFor = null },
+            onXlsx = { onSaveMessage(text, suggestFileName(text) + ".xlsx"); downloadFor = null },
+            onPptx = { onSaveMessage(text, suggestFileName(text) + ".pptx"); downloadFor = null },
+            onHtml = { onSaveMessage(text, suggestFileName(text) + ".html"); downloadFor = null },
+            onEpub = { onSaveMessage(text, suggestFileName(text) + ".epub"); downloadFor = null },
+            onSmart = { val (ext, content) = smartTextFile(text); onSaveMessage(content, suggestFileName(text) + "." + ext); downloadFor = null },
+            onCustom = { saveCustomFor = text; downloadFor = null },
+            onDismiss = { downloadFor = null }
+        )
+    }
+    saveCustomFor?.let { text ->
+        FileNameDialog(initial = suggestFileName(text) + ".pdf",
+            onSave = { name -> onSaveMessage(text, name); saveCustomFor = null },
+            onDismiss = { saveCustomFor = null })
+    }
+    if (convDownload) {
+        FormatChooserDialog(
+            onPdf = { onSaveConversation("waide-conversation.pdf"); convDownload = false },
+            onDocx = { onSaveConversation("waide-conversation.docx"); convDownload = false },
+            onXlsx = { onSaveConversation("waide-conversation.xlsx"); convDownload = false },
+            onPptx = { onSaveConversation("waide-conversation.pptx"); convDownload = false },
+            onHtml = { onSaveConversation("waide-conversation.html"); convDownload = false },
+            onEpub = { onSaveConversation("waide-conversation.epub"); convDownload = false },
+            onSmart = { onSaveConversation("waide-conversation.md"); convDownload = false },
+            onCustom = { convCustom = true; convDownload = false },
+            onDismiss = { convDownload = false }
+        )
+    }
+    if (convCustom) {
+        FileNameDialog(initial = "waide-conversation.pdf",
+            onSave = { name -> onSaveConversation(name); convCustom = false },
+            onDismiss = { convCustom = false })
+    }
 }
 
 private fun decodeB64(b64: String): ImageBitmap? = runCatching {
@@ -319,8 +379,9 @@ private fun decodeB64(b64: String): ImageBitmap? = runCatching {
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
 }.getOrNull()
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
+private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}, onDownload: () -> Unit = {}) {
     // A hidden image-read note: show only a tiny marker, never the readout text.
     if (m.role == "system") {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -333,7 +394,16 @@ private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
     }
 
     val isUser = m.role == "user"
-    Column(Modifier.fillMaxWidth()) {
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Copy", color = W.Text) },
+            onClick = { clipboard.setText(AnnotatedString(m.text)); menuOpen = false })
+        if (m.text.isNotBlank()) DropdownMenuItem(text = { Text("Download...", color = W.Text) },
+            onClick = { menuOpen = false; onDownload() })
+    }
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { menuOpen = true })) {
         Text(
             if (isUser) "YOU" else "SERVER",
             style = MaterialTheme.typography.labelSmall,
@@ -375,5 +445,6 @@ private fun SrvBubble(m: Message, onImageTap: (String) -> Unit = {}) {
                 )
             )
         }
+    }
     }
 }

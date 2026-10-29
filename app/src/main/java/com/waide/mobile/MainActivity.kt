@@ -318,7 +318,10 @@ private fun Shell(
                 Tab.Chat -> ChatScreen(
                     state = state,
                     onSend = { vm.send(it) },
-                    onStop = { vm.stopGeneration() }
+                    onStop = { vm.stopGeneration() },
+                    onSaveMessage = { text, name -> vm.saveText(text, name) },
+                    onSaveConversation = { name -> vm.saveConversation(name) },
+                    onDismissFilesMsg = { vm.dismissFilesMsg() }
                 )
                 Tab.Server -> ServerScreen(
                     state = serverState,
@@ -331,7 +334,10 @@ private fun Shell(
                     onConfirmBump = { svm.confirmBump() },
                     onDeclineBump = { svm.declineBump() },
                     onImagePicked = { svm.attachImage(it) },
-                    onClearImage = { svm.clearImage() }
+                    onClearImage = { svm.clearImage() },
+                    onSaveMessage = { text, name -> svm.saveText(text, name) },
+                    onSaveConversation = { name -> svm.saveConversation(name) },
+                    onDismissFilesMsg = { svm.dismissFilesMsg() }
                 )
                 Tab.Convos -> ConversationsScreen(
                     state = convState,
