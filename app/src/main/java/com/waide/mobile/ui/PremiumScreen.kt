@@ -497,6 +497,8 @@ private fun PremiumChat(
     var zoomB64 by remember { mutableStateOf<String?>(null) }
     var saveFileFor by remember { mutableStateOf<PremiumMsg?>(null) }
     var downloadFor by remember { mutableStateOf<PremiumMsg?>(null) }
+    var convDownload by remember { mutableStateOf(false) }   // whole-conversation format picker
+    var convCustom by remember { mutableStateOf(false) }     // whole-conversation custom name
     var modelPicker by remember { mutableStateOf(false) }
     val isMulti = state.openMode == "multi"
     val listState = rememberLazyListState()
@@ -537,6 +539,7 @@ private fun PremiumChat(
                 IconButton(onClick = { topMenu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Options", tint = W.Muted) }
                 DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
                     DropdownMenuItem(text = { Text("Rename", color = W.Text) }, onClick = { renameOpen = true; topMenu = false })
+                    DropdownMenuItem(text = { Text("Download conversation...", color = W.Text) }, onClick = { convDownload = true; topMenu = false })
                     DropdownMenuItem(text = { Text("Delete chat", color = W.Danger) }, onClick = { deleteOpen = true; topMenu = false })
                 }
             }
@@ -755,6 +758,25 @@ private fun PremiumChat(
         SaveTextFileDialog(
             onSave = { name -> vm.saveTextToFile(m.text, name); saveFileFor = null },
             onDismiss = { saveFileFor = null }
+        )
+    }
+    if (convDownload) {
+        FormatChooserDialog(
+            onPdf = { vm.saveConversation("waide-conversation.pdf"); convDownload = false },
+            onDocx = { vm.saveConversation("waide-conversation.docx"); convDownload = false },
+            onXlsx = { vm.saveConversation("waide-conversation.xlsx"); convDownload = false },
+            onPptx = { vm.saveConversation("waide-conversation.pptx"); convDownload = false },
+            onHtml = { vm.saveConversation("waide-conversation.html"); convDownload = false },
+            onEpub = { vm.saveConversation("waide-conversation.epub"); convDownload = false },
+            onSmart = { vm.saveConversation("waide-conversation.md"); convDownload = false },
+            onCustom = { convCustom = true; convDownload = false },
+            onDismiss = { convDownload = false }
+        )
+    }
+    if (convCustom) {
+        SaveTextFileDialog(
+            onSave = { name -> vm.saveConversation(name); convCustom = false },
+            onDismiss = { convCustom = false }
         )
     }
     if (state.filesOpen) {

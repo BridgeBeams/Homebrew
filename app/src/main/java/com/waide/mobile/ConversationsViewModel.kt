@@ -508,6 +508,13 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         saveTextToFile(content, suggestFileName(text) + "." + ext)
     }
 
+    /** Save the whole open conversation as one document (extension in [filename] = format). */
+    fun saveConversation(filename: String) {
+        val turns = _state.value.messages.map { it.role to it.text }
+        if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
+        saveTextToFile(Exporter.transcript(turns), filename)
+    }
+
     private fun saveToDownloads(name: String, mime: String, bytes: ByteArray): String {
         val ctx = getApplication<Application>()
         val safe = name.ifBlank { "waide-file" }

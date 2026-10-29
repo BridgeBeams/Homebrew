@@ -216,6 +216,38 @@ fun ProjectEditDialog(
     )
 }
 
+/** Ask for a filename, then save. Shared by the Local and Server chat tabs. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileNameDialog(initial: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }) { Text("Save", color = W.Amber) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
+        title = { Text("Save as file", color = W.Text) },
+        text = {
+            Column {
+                Text("Saves to your phone's Downloads folder. Any extension works: .pdf, .docx, " +
+                    ".xlsx, .pptx and .html build real files; .kt, .py, .json, .md, .txt, .csv and " +
+                    "others save as text.",
+                    color = W.Muted, style = MaterialTheme.typography.labelSmall)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    placeholder = { Text("filename.pdf", color = W.Muted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = W.Amber, unfocusedBorderColor = W.Line,
+                        focusedContainerColor = W.Bg, unfocusedContainerColor = W.Bg,
+                        focusedTextColor = W.Text, unfocusedTextColor = W.Text
+                    )
+                )
+            }
+        },
+        containerColor = W.Surface
+    )
+}
+
 /** Pick a file format to download a message as. Each row triggers its save immediately. */
 @Composable
 fun FormatChooserDialog(

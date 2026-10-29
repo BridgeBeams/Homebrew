@@ -10,8 +10,9 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
-    <!-- INTERNET is used ONLY by the Server tab to reach your own PC over Tailscale.
-         The local Chat tab still runs fully offline and sends nothing. -->
+    <!-- INTERNET is used to reach your own PC over Tailscale (Server/Saved chats) and
+         to search/download models from Hugging Face in Settings. Chatting with a local
+         model still runs fully offline and sends nothing. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Keeps the CPU/connection alive so an answer keeps generating while the
@@ -20,6 +21,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- So the "Open Tailscale" shortcut on a connection error can find and launch the
+         Tailscale app (package visibility is required on Android 11+). -->
+    <queries>
+        <package android:name="com.tailscale.ipn" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="market" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
