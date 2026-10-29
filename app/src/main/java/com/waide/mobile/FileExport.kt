@@ -30,6 +30,8 @@ internal fun mimeForName(name: String): String = when (name.substringAfterLast('
     "pdf" -> "application/pdf"
     "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "epub" -> "application/epub+zip"
     else -> "application/octet-stream"   // keeps the exact name/extension (.kt, .py, etc.)
 }
 
@@ -331,6 +333,16 @@ private val LANG_EXT = mapOf(
     "html" to "html", "css" to "css", "gradle" to "gradle", "markdown" to "md", "md" to "md",
     "toml" to "toml"
 )
+
+/** On-device fallback bytes for a document format when the PC server isn't reachable.
+ *  PowerPoint and EPUB have no on-device builder, so they need the server. */
+internal fun localDocBytes(fmt: String, text: String): ByteArray = when (fmt) {
+    "pdf" -> buildTextPdf(text)
+    "docx" -> buildDocx(text)
+    "xlsx" -> buildXlsx(text)
+    "html" -> buildHtml(text).toByteArray(Charsets.UTF_8)
+    else -> throw IllegalStateException("This format needs the PC server. Start the wAide server and try again.")
+}
 
 /** Best (extension, content) for a code/text file from this message. If the message is
  *  essentially one fenced code block, returns just that code with the language's extension. */

@@ -303,6 +303,23 @@ object ConversationsClient {
         if (c.responseCode != 200) fail(c)
     }
 
+    /** Ask the PC server to render text into a professional document (pdf/docx/xlsx/pptx/html).
+     *  Returns the file bytes, or null if the server is unreachable or can't render it. */
+    fun render(base: String, text: String, fmt: String): ByteArray? {
+        return try {
+            val c = open("$base/render", "POST", null)
+            c.doOutput = true
+            c.readTimeout = 60000
+            c.setRequestProperty("Content-Type", "application/json")
+            OutputStreamWriter(c.outputStream, Charsets.UTF_8).use {
+                it.write(JSONObject().put("text", text).put("format", fmt).toString())
+            }
+            if (c.responseCode != 200) return null
+            val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+            android.util.Base64.decode(o.optString("data"), android.util.Base64.DEFAULT)
+        } catch (e: Exception) { null }
+    }
+
     fun deleteMsg(base: String, token: String, id: String, mid: String) {
         val c = open("$base/conversations/$id/messages/$mid", "DELETE", token)
         if (c.responseCode != 200) fail(c)

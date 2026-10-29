@@ -468,15 +468,23 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun saveTextToFile(text: String, filename: String) {
         val name = filename.trim().ifBlank { "waide-note.md" }
         val lower = name.lowercase()
+        val b = base()
+        val fmt = when {
+            lower.endsWith(".pdf") -> "pdf"
+            lower.endsWith(".docx") -> "docx"
+            lower.endsWith(".xlsx") -> "xlsx"
+            lower.endsWith(".pptx") -> "pptx"
+            lower.endsWith(".epub") -> "epub"
+            lower.endsWith(".html") || lower.endsWith(".htm") -> "html"
+            else -> ""
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching {
-                val bytes: ByteArray = when {
-                    lower.endsWith(".pdf") -> buildTextPdf(text)
-                    lower.endsWith(".docx") -> buildDocx(text)
-                    lower.endsWith(".xlsx") -> buildXlsx(text)
-                    lower.endsWith(".html") || lower.endsWith(".htm") -> buildHtml(text).toByteArray(Charsets.UTF_8)
-                    else -> text.toByteArray(Charsets.UTF_8)
-                }
+                val bytes: ByteArray = if (fmt.isNotEmpty()) {
+                    // Prefer the PC server's professional renderer; fall back to on-device.
+                    (if (b.isNotBlank()) ConversationsClient.render(b, text, fmt) else null)
+                        ?: localDocBytes(fmt, text)
+                } else text.toByteArray(Charsets.UTF_8)
                 saveToDownloads(name, mimeForName(name), bytes)
             }
             withContext(Dispatchers.Main) {
@@ -491,6 +499,8 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     fun saveMessageAsPdf(text: String) = saveTextToFile(text, suggestFileName(text) + ".pdf")
     fun saveMessageAsDocx(text: String) = saveTextToFile(text, suggestFileName(text) + ".docx")
     fun saveMessageAsXlsx(text: String) = saveTextToFile(text, suggestFileName(text) + ".xlsx")
+    fun saveMessageAsPptx(text: String) = saveTextToFile(text, suggestFileName(text) + ".pptx")
+    fun saveMessageAsEpub(text: String) = saveTextToFile(text, suggestFileName(text) + ".epub")
     fun saveMessageAsHtml(text: String) = saveTextToFile(text, suggestFileName(text) + ".html")
     /** Auto-detect a code/text file (e.g. a ```python block saves as .py). */
     fun saveMessageSmart(text: String) {
