@@ -26,6 +26,7 @@ data class PremiumState(
     val loadingModels: Boolean = false,
     val selectedModel: String = "",        // default model for new chats
     val usage: Double? = null,             // OpenRouter spend in dollars (null = not loaded)
+    val percentLeft: Double? = null,       // % of this month's OpenRouter limit still available
     // conversations
     val conversations: List<PremiumSummary> = emptyList(),
     val loadingList: Boolean = false,
@@ -135,7 +136,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { PremiumClient.usage(b) }
             withContext(Dispatchers.Main) {
-                r.onSuccess { if (it.hasKey) _state.value = _state.value.copy(usage = it.usage) }
+                r.onSuccess { if (it.hasKey) _state.value = _state.value.copy(usage = it.usage, percentLeft = it.percentLeft) }
             }
         }
     }
