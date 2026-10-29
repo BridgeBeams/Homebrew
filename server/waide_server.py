@@ -483,6 +483,423 @@ def openrouter_usage():
             "credits": round(total, 4), "remaining": round(total - used, 4)}
 
 
+# ---------------------------------------------------------------- document rendering
+# Professional Word/PDF rendering on the PC (where real document tooling lives), so the
+# phone doesn't have to imitate it. Needs: pip install python-docx reportlab.
+# If either library is missing, the matching endpoint returns 501 and the app falls back
+# to its built-in on-device renderer.
+import io as _io
+import re as _re
+
+try:
+    import docx as _docx
+    from docx.shared import Pt as _Pt, Inches as _In
+    _HAS_DOCX = True
+except Exception:
+    _HAS_DOCX = False
+try:
+    from reportlab.lib.pagesizes import LETTER as _LETTER
+    from reportlab.lib.units import inch as _inch
+    from reportlab.lib.styles import ParagraphStyle as _PS
+    from reportlab.lib.colors import HexColor as _Hex
+    from reportlab.platypus import SimpleDocTemplate as _SDT, Paragraph as _Para
+    _HAS_RL = True
+except Exception:
+    _HAS_RL = False
+try:
+    import openpyxl as _openpyxl
+    from openpyxl.styles import Font as _XlFont
+    _HAS_XLSX = True
+except Exception:
+    _HAS_XLSX = False
+try:
+    from pptx import Presentation as _Presentation
+    _HAS_PPTX = True
+except Exception:
+    _HAS_PPTX = False
+try:
+    from ebooklib import epub as _epub
+    _HAS_EPUB = True
+except Exception:
+    _HAS_EPUB = False
+
+_INLINE_RE = _re.compile(r"\*\*(.+?)\*\*|`([^`]+?)`|\*(.+?)\*|_(.+?)_")
+
+
+def _md_blocks(text):
+    lines = text.replace("\r\n", "\n").split("\n")
+    blocks = []
+    para = []
+
+    def flush():
+        if any(x.strip() for x in para):
+            blocks.append(("PARA", " ".join(p.strip() for p in para).strip(), ""))
+        para.clear()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        t = line.lstrip()
+        if not t:
+            flush()
+        elif t.startswith("```"):
+            flush(); i += 1; code = []
+            while i < len(lines) and not lines[i].lstrip().startswith("```"):
+                code.append(lines[i]); i += 1
+            blocks.append(("CODE", "\n".join(code), ""))
+        elif _re.match(r"^(-{3,}|\*{3,}|_{3,})$", t):
+            flush()
+        elif t.startswith("### "):
+            flush(); blocks.append(("H3", t[4:], ""))
+        elif t.startswith("## "):
+            flush(); blocks.append(("H2", t[3:], ""))
+        elif t.startswith("# "):
+            flush(); blocks.append(("H1", t[2:], ""))
+        elif _re.match(r"^[-*+]\s+", t):
+            flush(); blocks.append(("BULLET", _re.sub(r"^[-*+]\s+", "", t), ""))
+        elif _re.match(r"^\d+\.\s+", t):
+            flush()
+            m = _re.match(r"^(\d+)\.\s+", t)
+            blocks.append(("NUMBER", _re.sub(r"^\d+\.\s+", "", t), m.group(1)))
+        elif t.startswith("> "):
+            flush(); blocks.append(("QUOTE", t[2:], ""))
+        else:
+            para.append(t)
+        i += 1
+    flush()
+    return blocks
+
+
+def _inline_tokens(s):
+    out = []; i = 0
+    for m in _INLINE_RE.finditer(s):
+        if m.start() > i:
+            out.append((s[i:m.start()], False, False, False))
+        if m.group(1):
+            out.append((m.group(1), True, False, False))
+        elif m.group(2):
+            out.append((m.group(2), False, False, True))
+        elif m.group(3):
+            out.append((m.group(3), False, True, False))
+        elif m.group(4):
+            out.append((m.group(4), False, True, False))
+        i = m.end()
+    if i < len(s):
+        out.append((s[i:], False, False, False))
+    return out
+
+
+def _pdf_escape(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _inline_pdf(s):
+    out = ""
+    for (tx, b, it, co) in _inline_tokens(s):
+        e = _pdf_escape(tx)
+        if co:
+            e = '<font face="Courier">%s</font>' % e
+        if b:
+            e = "<b>%s</b>" % e
+        if it:
+            e = "<i>%s</i>" % e
+        out += e
+    return out or "&nbsp;"
+
+
+def render_pdf_doc(text, title):
+    if not _HAS_RL:
+        raise ApiError(501, "PDF rendering not installed on the server (pip install reportlab)")
+    buf = _io.BytesIO()
+    doc = _SDT(buf, pagesize=_LETTER, topMargin=0.8 * _inch, bottomMargin=0.8 * _inch,
+               leftMargin=1 * _inch, rightMargin=1 * _inch, title=(title or "wAide"))
+    body = _PS("body", fontName="Times-Roman", fontSize=11, leading=15, spaceAfter=6)
+    h1 = _PS("h1", fontName="Helvetica-Bold", fontSize=16, leading=20, spaceBefore=10, spaceAfter=6)
+    h2 = _PS("h2", fontName="Helvetica-Bold", fontSize=13, leading=17, spaceBefore=8, spaceAfter=5)
+    h3 = _PS("h3", fontName="Helvetica-Bold", fontSize=11.5, leading=15, spaceBefore=6, spaceAfter=4)
+    code = _PS("code", fontName="Courier", fontSize=9.5, leading=12, leftIndent=12, spaceAfter=6, textColor=_Hex("#333333"))
+    bullet = _PS("bullet", parent=body, leftIndent=20, bulletIndent=6, spaceAfter=3)
+    quote = _PS("quote", parent=body, leftIndent=18, fontName="Times-Italic", textColor=_Hex("#555555"))
+    flow = []
+    for (t, s, marker) in _md_blocks(text):
+        if t == "CODE":
+            for ln in (s.split("\n") or [""]):
+                flow.append(_Para(_pdf_escape(ln) or "&nbsp;", code))
+        elif t == "H1":
+            flow.append(_Para(_inline_pdf(s), h1))
+        elif t == "H2":
+            flow.append(_Para(_inline_pdf(s), h2))
+        elif t == "H3":
+            flow.append(_Para(_inline_pdf(s), h3))
+        elif t == "BULLET":
+            flow.append(_Para(_inline_pdf(s), bullet, bulletText="•"))
+        elif t == "NUMBER":
+            flow.append(_Para(_inline_pdf(s), bullet, bulletText=marker + "."))
+        elif t == "QUOTE":
+            flow.append(_Para(_inline_pdf(s), quote))
+        else:
+            flow.append(_Para(_inline_pdf(s), body))
+    if not flow:
+        flow.append(_Para("&nbsp;", body))
+    doc.build(flow)
+    return buf.getvalue()
+
+
+def _docx_add_inline(p, s, size, bold=False, italic=False, mono=False):
+    toks = _inline_tokens(s)
+    if not toks:
+        r = p.add_run(""); r.font.size = _Pt(size); return
+    for (tx, b, it, co) in toks:
+        r = p.add_run(tx)
+        r.font.size = _Pt(size)
+        r.bold = bold or b
+        r.italic = italic or it
+        if mono or co:
+            r.font.name = "Consolas"
+
+
+def render_docx_doc(text, title):
+    if not _HAS_DOCX:
+        raise ApiError(501, "Word rendering not installed on the server (pip install python-docx)")
+    d = _docx.Document()
+    for sec in d.sections:
+        sec.top_margin = _In(0.8); sec.bottom_margin = _In(0.8)
+        sec.left_margin = _In(1.0); sec.right_margin = _In(1.0)
+    st = d.styles["Normal"]
+    st.font.name = "Calibri"; st.font.size = _Pt(11)
+    st.paragraph_format.space_after = _Pt(6); st.paragraph_format.line_spacing = 1.08
+    hsz = {"H1": 16, "H2": 13, "H3": 11.5}
+    hbefore = {"H1": 12, "H2": 10, "H3": 8}
+    for (t, s, marker) in _md_blocks(text):
+        if t == "CODE":
+            for ln in (s.split("\n") or [""]):
+                p = d.add_paragraph(); p.paragraph_format.space_after = _Pt(0)
+                _docx_add_inline(p, ln if ln else " ", 10, mono=True)
+        elif t in ("H1", "H2", "H3"):
+            p = d.add_paragraph()
+            p.paragraph_format.space_before = _Pt(hbefore[t]); p.paragraph_format.space_after = _Pt(4)
+            _docx_add_inline(p, s, hsz[t], bold=True)
+        elif t == "BULLET":
+            p = d.add_paragraph(style="List Bullet"); p.paragraph_format.space_after = _Pt(2)
+            _docx_add_inline(p, s, 11)
+        elif t == "NUMBER":
+            p = d.add_paragraph(style="List Number"); p.paragraph_format.space_after = _Pt(2)
+            _docx_add_inline(p, s, 11)
+        elif t == "QUOTE":
+            p = d.add_paragraph(); p.paragraph_format.left_indent = _In(0.3)
+            _docx_add_inline(p, s, 11, italic=True)
+        else:
+            p = d.add_paragraph()
+            _docx_add_inline(p, s, 11)
+    buf = _io.BytesIO(); d.save(buf)
+    return buf.getvalue()
+
+
+def _plain(s):
+    return "".join(t[0] for t in _inline_tokens(s))
+
+
+def _inline_html(s):
+    out = ""
+    for (tx, b, it, co) in _inline_tokens(s):
+        e = _pdf_escape(tx)
+        if co:
+            e = "<code>%s</code>" % e
+        if b:
+            e = "<strong>%s</strong>" % e
+        if it:
+            e = "<em>%s</em>" % e
+        out += e
+    return out
+
+
+def _parse_rows(text):
+    lines = [x.strip() for x in text.split("\n") if x.strip()]
+    tbl = [x for x in lines if x.startswith("|")]
+    if len(tbl) >= 2:
+        rows = []
+        for x in tbl:
+            if not x.replace("|", "").replace("-", "").replace(":", "").replace(" ", ""):
+                continue
+            rows.append([c.strip() for c in x.strip().strip("|").split("|")])
+        return rows
+    out = []
+    for x in lines:
+        if "\t" in x:
+            out.append(x.split("\t"))
+        elif "," in x:
+            out.append([c.strip() for c in x.split(",")])
+        else:
+            out.append([x])
+    return out
+
+
+def render_xlsx_doc(text, title):
+    if not _HAS_XLSX:
+        raise ApiError(501, "Excel rendering not installed on the server (pip install openpyxl)")
+    rows = _parse_rows(text or "") or [[""]]
+    wb = _openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for ri, row in enumerate(rows, 1):
+        for ci, val in enumerate(row, 1):
+            c = ws.cell(row=ri, column=ci, value=val)
+            if ri == 1:
+                c.font = _XlFont(bold=True)
+    for col in ws.columns:
+        w = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max(w + 2, 8), 60)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def render_pptx_doc(text, title):
+    if not _HAS_PPTX:
+        raise ApiError(501, "PowerPoint rendering not installed on the server (pip install python-pptx)")
+    prs = _Presentation()
+    blocks = _md_blocks(text or "")
+    slides = []
+    cur_title = title or "Slide"
+    cur_body = []
+    started = False
+
+    def push():
+        slides.append((cur_title, list(cur_body)))
+        cur_body.clear()
+
+    for (t, s, marker) in blocks:
+        if t in ("H1", "H2"):
+            if started:
+                push()
+            cur_title = _plain(s)
+            started = True
+        elif t == "BULLET":
+            cur_body.append(("b", _plain(s))); started = True
+        elif t == "NUMBER":
+            cur_body.append(("b", marker + ". " + _plain(s))); started = True
+        elif t == "CODE":
+            for ln in s.split("\n"):
+                cur_body.append(("p", ln))
+            started = True
+        else:
+            cur_body.append(("p", _plain(s))); started = True
+    push()
+
+    layout = prs.slide_layouts[1]
+    for (stitle, body) in slides:
+        sl = prs.slides.add_slide(layout)
+        if sl.shapes.title is not None:
+            sl.shapes.title.text = stitle
+        tf = sl.placeholders[1].text_frame
+        tf.clear()
+        first = True
+        for (kind, txt) in body:
+            p = tf.paragraphs[0] if first else tf.add_paragraph()
+            first = False
+            p.text = txt
+            p.level = 1 if kind == "b" else 0
+    buf = _io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _html_body(text):
+    """The inner HTML (block elements) for a message. Shared by HTML and EPUB output."""
+    out = []
+    mode = [None]
+
+    def close_list():
+        if mode[0] == "ul":
+            out.append("</ul>")
+        elif mode[0] == "ol":
+            out.append("</ol>")
+        mode[0] = None
+
+    for (t, s, marker) in _md_blocks(text or ""):
+        if t == "BULLET":
+            if mode[0] != "ul":
+                close_list(); out.append("<ul>"); mode[0] = "ul"
+            out.append("<li>" + _inline_html(s) + "</li>")
+        elif t == "NUMBER":
+            if mode[0] != "ol":
+                close_list(); out.append("<ol>"); mode[0] = "ol"
+            out.append("<li>" + _inline_html(s) + "</li>")
+        else:
+            close_list()
+            if t == "H1":
+                out.append("<h1>" + _inline_html(s) + "</h1>")
+            elif t == "H2":
+                out.append("<h2>" + _inline_html(s) + "</h2>")
+            elif t == "H3":
+                out.append("<h3>" + _inline_html(s) + "</h3>")
+            elif t == "CODE":
+                out.append("<pre>" + _pdf_escape(s) + "</pre>")
+            elif t == "QUOTE":
+                out.append("<blockquote>" + _inline_html(s) + "</blockquote>")
+            else:
+                out.append("<p>" + _inline_html(s) + "</p>")
+    close_list()
+    return "".join(out)
+
+
+def render_html_doc(text, title):
+    style = ("body{font-family:Georgia,'Times New Roman',serif;max-width:7.5in;margin:1in auto;"
+             "line-height:1.5;color:#1a1a1a;padding:0 1em}"
+             "h1,h2,h3{font-family:Helvetica,Arial,sans-serif;line-height:1.25}"
+             "code{font-family:Consolas,monospace;background:#f4f4f4;padding:1px 3px}"
+             "pre{font-family:Consolas,monospace;background:#f4f4f4;padding:10px;overflow:auto}"
+             "blockquote{color:#555;border-left:3px solid #ccc;padding-left:12px;font-style:italic}")
+    return ('<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" '
+            'content="width=device-width, initial-scale=1"><title>' + _pdf_escape(title or "wAide") +
+            '</title><style>' + style + '</style></head><body>' + _html_body(text) + '</body></html>')
+
+
+def render_epub_doc(text, title):
+    if not _HAS_EPUB:
+        raise ApiError(501, "EPUB rendering not installed on the server (pip install EbookLib)")
+    ttl = title or "wAide"
+    book = _epub.EpubBook()
+    book.set_identifier("waide-" + uuid.uuid4().hex)
+    book.set_title(ttl)
+    book.set_language("en")
+    ch = _epub.EpubHtml(title=ttl, file_name="chapter1.xhtml", lang="en")
+    ch.content = ('<html xmlns="http://www.w3.org/1999/xhtml"><head><title>' + _pdf_escape(ttl) +
+                  '</title></head><body>' + _html_body(text) + '</body></html>')
+    book.add_item(ch)
+    book.toc = [_epub.Link("chapter1.xhtml", ttl, "ch1")]
+    book.add_item(_epub.EpubNcx())
+    book.spine = [ch]
+    buf = _io.BytesIO()
+    _epub.write_epub(buf, book)
+    return buf.getvalue()
+
+
+_DOC_MIME = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "pdf": "application/pdf",
+    "html": "text/html",
+    "epub": "application/epub+zip",
+}
+
+
+def render_document(text, fmt, title):
+    fmt = (fmt or "pdf").lower()
+    if fmt == "docx":
+        return render_docx_doc(text or "", title), _DOC_MIME["docx"]
+    if fmt == "xlsx":
+        return render_xlsx_doc(text or "", title), _DOC_MIME["xlsx"]
+    if fmt == "pptx":
+        return render_pptx_doc(text or "", title), _DOC_MIME["pptx"]
+    if fmt == "html":
+        return render_html_doc(text or "", title).encode("utf-8"), _DOC_MIME["html"]
+    if fmt == "epub":
+        return render_epub_doc(text or "", title), _DOC_MIME["epub"]
+    return render_pdf_doc(text or "", title), _DOC_MIME["pdf"]
+
+
 def _premium_content(text, attachments):
     """Build an OpenAI-compatible content value. Plain string when there are no
     attachments; otherwise a parts array with images and files inline (base64)."""
@@ -1802,6 +2219,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "GET" and parts == ["premium", "usage"]:
             return self._send_json(200, openrouter_usage())
+
+        # Render a message's text into a professional document (Word/Excel/PowerPoint/PDF/HTML).
+        if method == "POST" and parts == ["render"]:
+            b = self._read_body()
+            data, mime = render_document(b.get("text", ""), b.get("format", "pdf"), b.get("title"))
+            return self._send_json(200, {"mime": mime,
+                                         "data": base64.b64encode(data).decode("ascii")})
 
         if method == "GET" and parts == ["premium", "conversations"]:
             return self._send_json(200, list_premium())
