@@ -23,7 +23,8 @@ data class ConvMsg(
     val role: String,
     val text: String,
     val imageB64: String? = null,   // thumbnail of an attached photo, if any
-    val hasVision: Boolean = false  // this turn had an image the vision model read
+    val hasVision: Boolean = false, // this turn had an image the vision model read
+    val model: String = ""          // the model that produced this assistant turn (for export labels)
 )
 data class LoginInfo(
     val token: String,
@@ -261,7 +262,7 @@ object ConversationsClient {
                 val img = m.optString("image")
                 val vn = m.optString("vision_note")
                 msgs.add(ConvMsg(m.optString("id"), m.optString("role"), m.optString("text"),
-                    if (img.isBlank()) null else img, vn.isNotBlank()))
+                    if (img.isBlank()) null else img, vn.isNotBlank(), m.optString("model")))
             }
         }
         return ConvDetail(o.optString("title", "Untitled"), msgs,

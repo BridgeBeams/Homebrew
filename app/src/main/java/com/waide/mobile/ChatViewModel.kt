@@ -17,7 +17,8 @@ data class Message(
     val role: String,              // "user" or "assistant"
     val text: String,
     val imageB64: String? = null,  // set on a Server-tab turn that had a photo attached (thumbnail)
-    val visionNote: String? = null // the vision model's readout, folded into this turn for the model
+    val visionNote: String? = null, // the vision model's readout, folded into this turn for the model
+    val model: String = ""         // the model that produced this assistant turn (for export labels)
 )
 
 data class ChatState(
@@ -98,8 +99,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Save the whole current conversation as one document. */
     fun saveConversation(filename: String) {
-        val model = _state.value.modelName
-        val turns = _state.value.messages.map { Exporter.speaker(it.role, model) to it.text }
+        val turns = _state.value.messages.map { Exporter.speaker(it.role, it.model) to it.text }
         if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
         saveText(Exporter.transcript(turns), filename)
     }
@@ -392,7 +392,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val used = LlamaBridge.nativeContextUsed()
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
-                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" }),
+                    messages = _state.value.messages + Message("assistant", reply.ifBlank { "(no reply)" },
+                        model = _state.value.modelName),
                     streaming = null,
                     busy = false,
                     contextUsed = used
