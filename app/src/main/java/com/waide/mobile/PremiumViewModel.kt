@@ -323,7 +323,7 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
         val b = base()
         _state.value = _state.value.copy(loadingList = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { PremiumClient.list(b) }
+            val r = runCatching { Net.retryOnConn { PremiumClient.list(b) } }
             withContext(Dispatchers.Main) {
                 r.onSuccess { _state.value = _state.value.copy(conversations = it, loadingList = false) }
                  .onFailure { _state.value = _state.value.copy(loadingList = false, error = it.message) }

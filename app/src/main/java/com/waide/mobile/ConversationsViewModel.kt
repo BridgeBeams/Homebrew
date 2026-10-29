@@ -193,7 +193,7 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         val b = base()
         _state.value = _state.value.copy(loadingList = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { ConversationsClient.list(b, token) }
+            val r = runCatching { Net.retryOnConn { ConversationsClient.list(b, token) } }
             withContext(Dispatchers.Main) {
                 r.onSuccess { _state.value = _state.value.copy(conversations = it, loadingList = false, error = null) }
                  .onFailure { _state.value = _state.value.copy(loadingList = false, error = it.message) }

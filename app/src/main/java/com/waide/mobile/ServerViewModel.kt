@@ -118,7 +118,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         _state.value = _state.value.copy(loadingModels = true, error = null)
         viewModelScope.launch(Dispatchers.IO) {
-            val result = runCatching { ServerClient.listModels(serverUrl()) }
+            val result = runCatching { Net.retryOnConn { ServerClient.listModels(serverUrl()) } }
             withContext(Dispatchers.Main) {
                 result.onSuccess { list ->
                     val saved = store.getServerModel()
