@@ -689,7 +689,8 @@ class PremiumViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Save the whole open conversation as one document (extension in [filename] = format). */
     fun saveConversation(filename: String) {
-        val turns = _state.value.messages.map { it.role to it.text }
+        // Per-message model, so an Ask-All export shows which model gave each reply.
+        val turns = _state.value.messages.map { Exporter.speaker(it.role, it.model) to it.text }
         if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
         saveTextToFile(Exporter.transcript(turns), filename)
     }
