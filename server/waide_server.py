@@ -20,6 +20,7 @@ Run:  py C:\\waide\\waide_server.py
 """
 
 import os
+import sys
 import json
 import math
 import time
@@ -493,7 +494,8 @@ import re as _re
 
 try:
     import docx as _docx
-    from docx.shared import Pt as _Pt, Inches as _In
+    from docx.shared import Pt as _Pt, Inches as _In, RGBColor as _RGB
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as _WDALIGN
     _HAS_DOCX = True
 except Exception:
     _HAS_DOCX = False
@@ -502,7 +504,7 @@ try:
     from reportlab.lib.units import inch as _inch
     from reportlab.lib.styles import ParagraphStyle as _PS
     from reportlab.lib.colors import HexColor as _Hex
-    from reportlab.platypus import SimpleDocTemplate as _SDT, Paragraph as _Para
+    from reportlab.platypus import SimpleDocTemplate as _SDT, Paragraph as _Para, HRFlowable as _HR, Spacer as _Spacer
     _HAS_RL = True
 except Exception:
     _HAS_RL = False
@@ -532,8 +534,18 @@ def _md_blocks(text):
     para = []
 
     def flush():
-        if any(x.strip() for x in para):
-            blocks.append(("PARA", " ".join(p.strip() for p in para).strip(), ""))
+        nonblank = [p.strip() for p in para if p.strip()]
+        s = " ".join(nonblank).strip()
+        if s:
+            # Promote a standalone, short, fully-bold line (e.g. **Primary Responsibilities**)
+            # to a heading, since models often use bold instead of ## for section titles.
+            m = _re.match(r"^\*\*(.+)\*\*$", s)
+            inner = m.group(1).strip() if m else ""
+            if (m and len(nonblank) == 1 and "**" not in inner and len(inner) <= 40
+                    and ":" not in inner and not _re.search(r"[.!?]$", inner)):
+                blocks.append(("H2", inner, ""))
+            else:
+                blocks.append(("PARA", s, ""))
         para.clear()
 
     i = 0
@@ -613,18 +625,28 @@ def render_pdf_doc(text, title):
     buf = _io.BytesIO()
     doc = _SDT(buf, pagesize=_LETTER, topMargin=0.8 * _inch, bottomMargin=0.8 * _inch,
                leftMargin=1 * _inch, rightMargin=1 * _inch, title=(title or "wAide"))
-    body = _PS("body", fontName="Times-Roman", fontSize=11, leading=15, spaceAfter=6)
-    h1 = _PS("h1", fontName="Helvetica-Bold", fontSize=16, leading=20, spaceBefore=10, spaceAfter=6)
-    h2 = _PS("h2", fontName="Helvetica-Bold", fontSize=13, leading=17, spaceBefore=8, spaceAfter=5)
-    h3 = _PS("h3", fontName="Helvetica-Bold", fontSize=11.5, leading=15, spaceBefore=6, spaceAfter=4)
+    INK = _Hex("#1a1a1a"); HEADINK = _Hex("#111111"); RULE = _Hex("#cfcfcf")
+    body = _PS("body", fontName="Helvetica", fontSize=10.5, leading=15, spaceAfter=8, textColor=INK)
+    titlep = _PS("titlep", fontName="Helvetica-Bold", fontSize=20, leading=24, alignment=1,
+                 textColor=HEADINK, spaceBefore=0, spaceAfter=2)
+    h1 = _PS("h1", fontName="Helvetica-Bold", fontSize=15, leading=19, spaceBefore=13, spaceAfter=5, textColor=HEADINK)
+    h2 = _PS("h2", fontName="Helvetica-Bold", fontSize=13.5, leading=17, spaceBefore=13, spaceAfter=4, textColor=HEADINK)
+    h3 = _PS("h3", fontName="Helvetica-Bold", fontSize=11.5, leading=15, spaceBefore=9, spaceAfter=3, textColor=HEADINK)
     code = _PS("code", fontName="Courier", fontSize=9.5, leading=12, leftIndent=12, spaceAfter=6, textColor=_Hex("#333333"))
-    bullet = _PS("bullet", parent=body, leftIndent=20, bulletIndent=6, spaceAfter=3)
-    quote = _PS("quote", parent=body, leftIndent=18, fontName="Times-Italic", textColor=_Hex("#555555"))
+    bullet = _PS("bullet", parent=body, leftIndent=20, bulletIndent=6, spaceAfter=4)
+    quote = _PS("quote", parent=body, leftIndent=18, fontName="Helvetica-Oblique", textColor=_Hex("#555555"))
     flow = []
+    used_title = False
     for (t, s, marker) in _md_blocks(text):
         if t == "CODE":
             for ln in (s.split("\n") or [""]):
                 flow.append(_Para(_pdf_escape(ln) or "&nbsp;", code))
+        elif t == "H1" and not used_title:
+            # First top-level heading becomes a centered, colored document title with a rule.
+            used_title = True
+            flow.append(_Para(_inline_pdf(s), titlep))
+            flow.append(_Spacer(1, 3))
+            flow.append(_HR(width="100%", thickness=0.8, color=RULE, spaceBefore=1, spaceAfter=11))
         elif t == "H1":
             flow.append(_Para(_inline_pdf(s), h1))
         elif t == "H2":
@@ -645,7 +667,7 @@ def render_pdf_doc(text, title):
     return buf.getvalue()
 
 
-def _docx_add_inline(p, s, size, bold=False, italic=False, mono=False):
+def _docx_add_inline(p, s, size, bold=False, italic=False, mono=False, color=None):
     toks = _inline_tokens(s)
     if not toks:
         r = p.add_run(""); r.font.size = _Pt(size); return
@@ -654,6 +676,8 @@ def _docx_add_inline(p, s, size, bold=False, italic=False, mono=False):
         r.font.size = _Pt(size)
         r.bold = bold or b
         r.italic = italic or it
+        if color is not None:
+            r.font.color.rgb = color
         if mono or co:
             r.font.name = "Consolas"
 
@@ -668,17 +692,26 @@ def render_docx_doc(text, title):
     st = d.styles["Normal"]
     st.font.name = "Calibri"; st.font.size = _Pt(11)
     st.paragraph_format.space_after = _Pt(6); st.paragraph_format.line_spacing = 1.08
-    hsz = {"H1": 16, "H2": 13, "H3": 11.5}
-    hbefore = {"H1": 12, "H2": 10, "H3": 8}
+    INK = _RGB(0x11, 0x11, 0x11)
+    hsz = {"H1": 15, "H2": 13.5, "H3": 11.5}
+    hbefore = {"H1": 13, "H2": 13, "H3": 9}
+    hcolor = {"H1": INK, "H2": INK, "H3": INK}
+    used_title = False
     for (t, s, marker) in _md_blocks(text):
         if t == "CODE":
             for ln in (s.split("\n") or [""]):
                 p = d.add_paragraph(); p.paragraph_format.space_after = _Pt(0)
                 _docx_add_inline(p, ln if ln else " ", 10, mono=True)
+        elif t == "H1" and not used_title:
+            # First top-level heading becomes a centered, colored document title.
+            used_title = True
+            p = d.add_paragraph(); p.alignment = _WDALIGN.CENTER
+            p.paragraph_format.space_before = _Pt(0); p.paragraph_format.space_after = _Pt(10)
+            _docx_add_inline(p, s, 20, bold=True, color=INK)
         elif t in ("H1", "H2", "H3"):
             p = d.add_paragraph()
             p.paragraph_format.space_before = _Pt(hbefore[t]); p.paragraph_format.space_after = _Pt(4)
-            _docx_add_inline(p, s, hsz[t], bold=True)
+            _docx_add_inline(p, s, hsz[t], bold=True, color=hcolor[t])
         elif t == "BULLET":
             p = d.add_paragraph(style="List Bullet"); p.paragraph_format.space_after = _Pt(2)
             _docx_add_inline(p, s, 11)
@@ -844,9 +877,13 @@ def _html_body(text):
 
 
 def render_html_doc(text, title):
-    style = ("body{font-family:Georgia,'Times New Roman',serif;max-width:7.5in;margin:1in auto;"
-             "line-height:1.5;color:#1a1a1a;padding:0 1em}"
-             "h1,h2,h3{font-family:Helvetica,Arial,sans-serif;line-height:1.25}"
+    style = ("body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:7.5in;"
+             "margin:1in auto;line-height:1.6;color:#1a1a1a;padding:0 1em}"
+             "h1,h2,h3{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;line-height:1.25;color:#111}"
+             "h1{font-size:1.8em;text-align:center;margin:0 0 .15em;"
+             "border-bottom:1px solid #cfcfcf;padding-bottom:.25em}"
+             "h2{font-size:1.35em;margin:1.2em 0 .3em}"
+             "h3{font-size:1.1em;margin:.9em 0 .25em}"
              "code{font-family:Consolas,monospace;background:#f4f4f4;padding:1px 3px}"
              "pre{font-family:Consolas,monospace;background:#f4f4f4;padding:10px;overflow:auto}"
              "blockquote{color:#555;border-left:3px solid #ccc;padding-left:12px;font-style:italic}")
@@ -1090,6 +1127,49 @@ def compaction_prefix(rec):
         return []
     return [{"role": "system",
              "content": "Summary of earlier parts of this conversation (compacted to save space):\n" + s}]
+
+
+# ---------------------------------------------------------------- wAide instructions
+# Who wAide is and how it should write, prepended to every PREMIUM (cloud) chat so the
+# model returns finished, professional work instead of fill-in-the-blank templates.
+# Edit BUSINESS_CONTEXT if the company details ever change.
+BUSINESS_CONTEXT = (
+    "The user is Wade Thomson, President of Thomson Prestress, LLC, a PCI-certified precast "
+    "and prestressed concrete manufacturer at 1631 Ashport Road, Jackson, TN 38305. Wade is "
+    "also President of Omega Concrete, LLC (ready-mix concrete) and Universal Hauling, LLC "
+    "(heavy-haul trucking), both in Jackson, TN. When you write a letter, memo, or other "
+    "document for one of these companies, use that company's name and the Ashport Road "
+    "address as the letterhead and sign as Wade Thomson, President, unless told otherwise."
+)
+
+
+def premium_system():
+    """System message prepended to premium chats so output is finished and professional."""
+    lt = time.localtime()
+    today = time.strftime("%B ", lt) + str(lt.tm_mday) + time.strftime(", %Y", lt)
+    prompt = (
+        "You are wAide, a sharp and capable AI assistant. Match the quality and polish of the "
+        "best AI assistants: finished, specific, and ready to use.\n\n"
+        f"Today's date is {today}.\n\n"
+        + BUSINESS_CONTEXT + "\n\n"
+        "When asked to produce a document (letter, memo, proposal, email, policy, report, "
+        "agenda, and the like), deliver the COMPLETE, final, ready-to-send version:\n"
+        "- Never leave fill-in-the-blank placeholders such as [Date], [Name], [Address], "
+        "[Supervisor], or [Start Date]. Fill every field using today's date and the business "
+        "details above, and make reasonable professional choices for small specifics rather "
+        "than bracketing them.\n"
+        "- If one essential fact is genuinely unknown and cannot be reasonably inferred, ask a "
+        "single short question before writing instead of inserting a placeholder.\n"
+        "- Format with clean structure the document renderer can make look sharp: a title or "
+        "letterhead at the top, short paragraphs, bold for key labels, and bulleted or "
+        "numbered lists where they help. Use proper Markdown (#, ##, **bold**, - bullets).\n"
+        "- Keep a standard business letter to a single page. Be complete, but do not pad.\n\n"
+        "For anything that will go out under Wade's name (letters, emails), do not use em "
+        "dashes; use commas, periods, semicolons, parentheses, or short hyphens instead, and "
+        "avoid hyphenated compound words, since that can read as AI assisted.\n\n"
+        "In normal back-and-forth conversation, be direct and useful and skip filler."
+    )
+    return [{"role": "system", "content": prompt}]
 
 
 # ---------------------------------------------------------------- conversation files
@@ -2220,12 +2300,21 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and parts == ["premium", "usage"]:
             return self._send_json(200, openrouter_usage())
 
-        # Render a message's text into a professional document (Word/Excel/PowerPoint/PDF/HTML).
+        # Render a message's text into a professional document (Word/Excel/PowerPoint/PDF/HTML/EPUB).
         if method == "POST" and parts == ["render"]:
             b = self._read_body()
             data, mime = render_document(b.get("text", ""), b.get("format", "pdf"), b.get("title"))
             return self._send_json(200, {"mime": mime,
                                          "data": base64.b64encode(data).decode("ascii")})
+
+        # Quick health check: which document renderers are installed. Open this in a browser
+        # (http://127.0.0.1:11435/render/status) to confirm the new server + libraries are live.
+        if method == "GET" and parts == ["render", "status"]:
+            return self._send_json(200, {
+                "server": "render-v2",
+                "pdf": _HAS_RL, "docx": _HAS_DOCX, "xlsx": _HAS_XLSX,
+                "pptx": _HAS_PPTX, "epub": _HAS_EPUB,
+            })
 
         if method == "GET" and parts == ["premium", "conversations"]:
             return self._send_json(200, list_premium())
@@ -2649,7 +2738,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Build the request. Only the current turn carries the actual attachment bytes;
         # earlier turns go as text with a note; folded turns are covered by the summary.
-        msgs = list(compaction_prefix(c))
+        msgs = premium_system() + list(compaction_prefix(c))
         done = int(c.get("compacted_count", 0))
         hist = c["messages"]
         seen = 0
@@ -2786,7 +2875,7 @@ class Handler(BaseHTTPRequestHandler):
 
         hist = list(c["messages"])
         done = int(c.get("compacted_count", 0))
-        prefix = compaction_prefix(c)
+        prefix = premium_system() + list(compaction_prefix(c))
 
         # Each model sees the shared summary, the user turns, and ITS OWN prior replies.
         def build_for(model_id):
@@ -2992,6 +3081,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # ---------------------------------------------------------------- run
+class _QuietHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that doesn't dump a traceback when the phone drops a connection
+    mid-request (WinError 10054 / aborted / broken pipe). Those are normal and harmless."""
+    def handle_error(self, request, client_address):
+        et = sys.exc_info()[0]
+        if et is not None and issubclass(et, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     print("wAide Conversations service")
     print(f"  data:   {DATA_DIR}")
@@ -3000,7 +3099,7 @@ if __name__ == "__main__":
     httpd = None
     for _ in range(30):
         try:
-            httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+            httpd = _QuietHTTPServer((HOST, PORT), Handler)
             break
         except OSError as e:
             print(f"  bind not ready ({e}); retrying in 2s...")
