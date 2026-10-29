@@ -222,7 +222,9 @@ fun FormatChooserDialog(
     onPdf: () -> Unit,
     onDocx: () -> Unit,
     onXlsx: () -> Unit,
+    onPptx: () -> Unit,
     onHtml: () -> Unit,
+    onEpub: () -> Unit,
     onSmart: () -> Unit,
     onCustom: () -> Unit,
     onDismiss: () -> Unit
@@ -233,14 +235,18 @@ fun FormatChooserDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = W.Muted) } },
         title = { Text("Download as", color = W.Text) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 FmtRow("PDF document (.pdf)", onPdf)
                 HorizontalDivider(color = W.Line)
                 FmtRow("Word document (.docx)", onDocx)
                 HorizontalDivider(color = W.Line)
                 FmtRow("Excel spreadsheet (.xlsx)", onXlsx)
                 HorizontalDivider(color = W.Line)
+                FmtRow("PowerPoint (.pptx)", onPptx)
+                HorizontalDivider(color = W.Line)
                 FmtRow("Web page (.html)", onHtml)
+                HorizontalDivider(color = W.Line)
+                FmtRow("E-book (.epub)", onEpub)
                 HorizontalDivider(color = W.Line)
                 FmtRow("Code or text file (auto)", onSmart)
                 HorizontalDivider(color = W.Line)

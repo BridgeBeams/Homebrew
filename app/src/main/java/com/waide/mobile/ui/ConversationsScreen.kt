@@ -825,7 +825,9 @@ private fun ConvChat(
             onPdf = { vm.saveMessageAsPdf(m.text); downloadFor = null },
             onDocx = { vm.saveMessageAsDocx(m.text); downloadFor = null },
             onXlsx = { vm.saveMessageAsXlsx(m.text); downloadFor = null },
+            onPptx = { vm.saveMessageAsPptx(m.text); downloadFor = null },
             onHtml = { vm.saveMessageAsHtml(m.text); downloadFor = null },
+            onEpub = { vm.saveMessageAsEpub(m.text); downloadFor = null },
             onSmart = { vm.saveMessageSmart(m.text); downloadFor = null },
             onCustom = { saveFileFor = m; downloadFor = null },
             onDismiss = { downloadFor = null }
