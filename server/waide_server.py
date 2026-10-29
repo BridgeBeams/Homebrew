@@ -539,7 +539,10 @@ try:
 except Exception:
     _HAS_EPUB = False
 
-_INLINE_RE = _re.compile(r"\*\*(.+?)\*\*|`([^`]+?)`|\*(.+?)\*|_(.+?)_")
+# Bold **..**, code `..`, italic *..*, and italic _.._ . The underscore form requires word
+# boundaries and no underscores inside, so runs of underscores (signature lines, fill-in
+# blanks) and snake_case are left completely alone.
+_INLINE_RE = _re.compile(r"\*\*(.+?)\*\*|`([^`]+?)`|\*(.+?)\*|(?<![\w_])_([^\s_](?:[^_]*[^\s_])?)_(?![\w_])")
 
 
 def _md_blocks(text):
@@ -549,13 +552,15 @@ def _md_blocks(text):
 
     def flush():
         nonblank = [p.strip() for p in para if p.strip()]
-        s = " ".join(nonblank).strip()
-        if s:
+        if nonblank:
+            # Keep single line breaks within a paragraph (so signature blocks, addresses and
+            # closings stack instead of collapsing onto one line). Renderers turn \n into a break.
+            s = "\n".join(nonblank)
             # Promote a standalone, short, fully-bold line (e.g. **Primary Responsibilities**)
             # to a heading, since models often use bold instead of ## for section titles.
-            m = _re.match(r"^\*\*(.+)\*\*$", s)
+            m = _re.match(r"^\*\*(.+)\*\*$", nonblank[0]) if len(nonblank) == 1 else None
             inner = m.group(1).strip() if m else ""
-            if (m and len(nonblank) == 1 and "**" not in inner and len(inner) <= 40
+            if (m and "**" not in inner and len(inner) <= 40
                     and ":" not in inner and not _re.search(r"[.!?]$", inner)):
                 blocks.append(("H2", inner, ""))
             else:
@@ -630,7 +635,7 @@ def _inline_pdf(s):
         if it:
             e = "<i>%s</i>" % e
         out += e
-    return out or "&nbsp;"
+    return out.replace("\n", "<br/>") or "&nbsp;"
 
 
 def render_pdf_doc(text, title):
@@ -686,14 +691,18 @@ def _docx_add_inline(p, s, size, bold=False, italic=False, mono=False, color=Non
     if not toks:
         r = p.add_run(""); r.font.size = _Pt(size); return
     for (tx, b, it, co) in toks:
-        r = p.add_run(tx)
-        r.font.size = _Pt(size)
-        r.bold = bold or b
-        r.italic = italic or it
-        if color is not None:
-            r.font.color.rgb = color
-        if mono or co:
-            r.font.name = "Consolas"
+        parts = tx.split("\n")
+        for j, part in enumerate(parts):
+            if j > 0:
+                p.add_run().add_break()   # preserve single line breaks within a paragraph
+            r = p.add_run(part)
+            r.font.size = _Pt(size)
+            r.bold = bold or b
+            r.italic = italic or it
+            if color is not None:
+                r.font.color.rgb = color
+            if mono or co:
+                r.font.name = "Consolas"
 
 
 def render_docx_doc(text, title):
@@ -757,7 +766,7 @@ def _inline_html(s):
         if it:
             e = "<em>%s</em>" % e
         out += e
-    return out
+    return out.replace("\n", "<br>")
 
 
 def _parse_rows(text):
