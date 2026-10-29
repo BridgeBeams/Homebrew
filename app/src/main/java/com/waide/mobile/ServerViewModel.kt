@@ -79,8 +79,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Save the whole current conversation as one document. */
     fun saveConversation(filename: String) {
-        val model = _state.value.selectedModel
-        val turns = _state.value.messages.map { Exporter.speaker(it.role, model) to it.text }
+        val turns = _state.value.messages.map { Exporter.speaker(it.role, it.model) to it.text }
         if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
         saveText(Exporter.transcript(turns), filename)
     }
@@ -412,7 +411,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
             var acc = ""
             var genImage: String? = null
-            val reply = ServerClient.chatStream(serverUrl(), _state.value.selectedModel, toSend, numCtx,
+            val usedModel = _state.value.selectedModel
+            val reply = ServerClient.chatStream(serverUrl(), usedModel, toSend, numCtx,
                 onImage = { if (genImage == null) genImage = it }) { piece ->
                 acc += piece
                 _state.value = _state.value.copy(streaming = acc)
@@ -420,7 +420,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
                     messages = _state.value.messages + Message("assistant",
-                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage),
+                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage,
+                        model = usedModel),
                     streaming = null, busy = false
                 )
             }
@@ -472,7 +473,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 _state.value = _state.value.copy(
                     messages = _state.value.messages + Message("assistant",
-                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage),
+                        reply.ifBlank { if (genImage != null) "" else "(no reply)" }, imageB64 = genImage,
+                        model = model),
                     streaming = null, busy = false
                 )
             }
