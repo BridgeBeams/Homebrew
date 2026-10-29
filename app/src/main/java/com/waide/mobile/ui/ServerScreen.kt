@@ -175,12 +175,7 @@ fun ServerScreen(
             }
         }
 
-        state.error?.let {
-            Text(
-                it, color = W.Danger, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(14.dp)
-            )
-        }
+        state.error?.let { ConnErrorBar(it) }
 
         HorizontalDivider(color = W.Line)
         Column(Modifier.background(W.Surface).imePadding()) {

@@ -137,10 +137,7 @@ fun ServerModelsScreen(
         }
         HorizontalDivider(color = W.Line)
 
-        state.error?.let {
-            Text(it, color = W.Danger, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(14.dp))
-        }
+        state.error?.let { ConnErrorBar(it) }
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {

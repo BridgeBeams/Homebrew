@@ -121,10 +121,7 @@ private fun PremiumAgentList(
             color = W.Muted, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.fillMaxWidth().background(W.SurfaceHi).padding(horizontal = 14.dp, vertical = 6.dp))
 
-        state.error?.let {
-            Text(it, color = W.Danger, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(12.dp))
-        }
+        state.error?.let { ConnErrorBar(it) }
 
         if (state.agents.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -279,10 +276,7 @@ private fun PremiumAgentChat(
             }
         }
 
-        state.error?.let {
-            Text(it, color = W.Danger, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth().background(Color(0xFF2A1512)).padding(12.dp))
-        }
+        state.error?.let { ConnErrorBar(it) }
 
         HorizontalDivider(color = W.Line)
         Column(Modifier.background(W.Surface).imePadding()) {
