@@ -176,8 +176,8 @@ private fun PremiumList(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Premium AI", style = MaterialTheme.typography.titleMedium, color = W.Amber,
                         maxLines = 1, modifier = Modifier.weight(1f))
-                    state.usage?.let { u ->
-                        Text("OpenRouter  $" + String.format("%.2f", u), color = W.Amber,
+                    state.percentLeft?.let { p ->
+                        Text("OpenRouter  " + String.format("%.2f", p) + "%", color = W.Amber,
                             style = MaterialTheme.typography.labelMedium, maxLines = 1)
                     }
                 }
