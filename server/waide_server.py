@@ -465,23 +465,37 @@ def openrouter_models():
 
 
 def openrouter_usage():
-    """Current spend on the OpenRouter account, read with the stored key. Returns the
-    dollars used (and remaining credit) so the app can show it without the website."""
+    """This key's budget, read with the stored key via OpenRouter's /key endpoint. Returns
+    the percent of the current period's credit limit still available (and the raw figures),
+    so the Premium header shows a gauge that resets when the key's limit resets (monthly on
+    the 1st, in Wade's setup). Falls back to a $150 limit if the key has none set."""
     key = get_openrouter_key()
     if not key:
         return {"has_key": False}
-    req = urllib.request.Request(f"{OPENROUTER_URL}/credits", headers=_openrouter_headers(key))
+    req = urllib.request.Request(f"{OPENROUTER_URL}/key", headers=_openrouter_headers(key))
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read().decode("utf-8")).get("data", {})
     except urllib.error.HTTPError as e:
-        raise ApiError(e.code, f"OpenRouter credits error {e.code}")
+        raise ApiError(e.code, f"OpenRouter key error {e.code}")
     except Exception as e:
         raise ApiError(502, f"cannot reach OpenRouter: {e}")
-    total = float(data.get("total_credits", 0) or 0)
-    used = float(data.get("total_usage", 0) or 0)
-    return {"has_key": True, "usage": round(used, 4),
-            "credits": round(total, 4), "remaining": round(total - used, 4)}
+    # Pick the usage window that matches how this key's limit resets.
+    reset = (data.get("limit_reset") or "").lower()
+    used = float({
+        "daily": data.get("usage_daily"),
+        "weekly": data.get("usage_weekly"),
+        "monthly": data.get("usage_monthly"),
+    }.get(reset, data.get("usage")) or 0)
+    lim = data.get("limit")
+    limit = float(lim) if lim not in (None, "") else 150.0
+    remaining = max(0.0, limit - used)
+    pct_left = round((remaining / limit) * 100.0, 4) if limit > 0 else 0.0
+    return {"has_key": True, "reset": reset or "total",
+            "limit": round(limit, 4), "used": round(used, 4),
+            "remaining": round(remaining, 4), "percent_left": pct_left,
+            # kept for backward compatibility with older app builds
+            "usage": round(used, 4), "credits": round(limit, 4)}
 
 
 # ---------------------------------------------------------------- document rendering
