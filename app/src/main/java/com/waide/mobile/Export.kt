@@ -59,12 +59,23 @@ object Exporter {
         return saveToDownloads(app, name, mimeForName(name), bytes)
     }
 
-    /** Join a whole conversation (role/text pairs, in order) into one Markdown transcript. */
+    /** The heading label for one turn: "You" for the user; for an assistant, "wAide · <model>"
+     *  when the model is known (so an Ask-All export shows which model gave each reply), else
+     *  plain "wAide". The model id is shortened to its slug (anthropic/claude-fable-5.1 ->
+     *  claude-fable-5.1). */
+    fun speaker(role: String, model: String): String = when {
+        role == "user" -> "You"
+        model.isBlank() -> "wAide"
+        else -> "wAide · " + model.substringAfterLast('/')
+    }
+
+    /** Join a whole conversation into one Markdown transcript. Each turn is (speaker label, text),
+     *  where the label is already resolved by the caller (see [speaker]). */
     fun transcript(turns: List<Pair<String, String>>): String {
         val sb = StringBuilder()
-        for ((role, text) in turns) {
+        for ((who, text) in turns) {
             if (text.isBlank()) continue
-            sb.append("## ").append(if (role == "user") "You" else "wAide").append("\n\n")
+            sb.append("## ").append(who).append("\n\n")
             sb.append(text.trim()).append("\n\n")
         }
         return sb.toString().trim()

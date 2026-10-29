@@ -79,7 +79,8 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Save the whole current conversation as one document. */
     fun saveConversation(filename: String) {
-        val turns = _state.value.messages.map { it.role to it.text }
+        val model = _state.value.selectedModel
+        val turns = _state.value.messages.map { Exporter.speaker(it.role, model) to it.text }
         if (turns.isEmpty()) { _state.value = _state.value.copy(filesMsg = "Nothing to save yet."); return }
         saveText(Exporter.transcript(turns), filename)
     }
