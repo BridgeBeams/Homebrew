@@ -544,6 +544,93 @@ try:
     _HAS_EPUB = True
 except Exception:
     _HAS_EPUB = False
+try:
+    import pypdf as _pypdf
+    _HAS_PYPDF = True
+except Exception:
+    _HAS_PYPDF = False
+
+# ---------------------------------------------------------------- file reading (uploads)
+# Pull readable text out of an uploaded file so a local/saved model can "read" it. Reuses
+# the document libraries already here (openpyxl / python-docx / python-pptx) plus pypdf for
+# PDFs; plain-text and code types are decoded directly. Returns a trimmed text block, never
+# raises. _FILE_TEXT_LIMIT keeps a huge file from blowing a small model's context.
+_FILE_TEXT_LIMIT = 60000
+_TEXT_EXTS = {
+    "txt", "text", "md", "markdown", "rst", "log", "csv", "tsv", "json", "xml", "yaml",
+    "yml", "ini", "cfg", "conf", "toml", "env", "py", "js", "ts", "tsx", "jsx", "kt",
+    "kts", "java", "c", "h", "cpp", "cc", "hpp", "cs", "go", "rs", "rb", "php", "swift",
+    "sh", "bash", "zsh", "bat", "ps1", "sql", "html", "htm", "css", "scss", "gradle",
+    "properties", "srt", "vtt",
+}
+
+def _file_ext(name):
+    name = (name or "").strip().lower()
+    return name.rsplit(".", 1)[-1] if "." in name else ""
+
+def extract_file_text(name, b64):
+    """Return readable text from an uploaded file (base64). Never raises."""
+    try:
+        raw = base64.b64decode(b64 or "")
+    except Exception:
+        return "[the attached file could not be decoded]"
+    ext = _file_ext(name)
+    text = ""
+    try:
+        if ext in _TEXT_EXTS:
+            text = raw.decode("utf-8", errors="replace")
+        elif ext == "xlsx" and _HAS_XLSX:
+            wb = _openpyxl.load_workbook(_io.BytesIO(raw), read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets:
+                parts.append(f"## Sheet: {ws.title}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = ["" if v is None else str(v) for v in row]
+                    if any(c.strip() for c in cells):
+                        parts.append("\t".join(cells))
+            try:
+                wb.close()
+            except Exception:
+                pass
+            text = "\n".join(parts)
+        elif ext == "docx" and _HAS_DOCX:
+            d = _docx.Document(_io.BytesIO(raw))
+            lines = [p.text for p in d.paragraphs]
+            for tbl in d.tables:
+                for row in tbl.rows:
+                    lines.append("\t".join(cell.text for cell in row.cells))
+            text = "\n".join(lines)
+        elif ext == "pptx" and _HAS_PPTX:
+            prs = _Presentation(_io.BytesIO(raw))
+            parts = []
+            for i, slide in enumerate(prs.slides, 1):
+                parts.append(f"## Slide {i}")
+                for shape in slide.shapes:
+                    if getattr(shape, "has_text_frame", False):
+                        for para in shape.text_frame.paragraphs:
+                            t = "".join(run.text for run in para.runs)
+                            if t.strip():
+                                parts.append(t)
+            text = "\n".join(parts)
+        elif ext == "pdf":
+            if not _HAS_PYPDF:
+                return ("[PDF reading needs the 'pypdf' library on the wAide server. "
+                        "Install it with:  pip install pypdf]")
+            reader = _pypdf.PdfReader(_io.BytesIO(raw))
+            text = "\n\n".join((pg.extract_text() or "") for pg in reader.pages)
+        else:
+            # Unknown type: try UTF-8, otherwise report rather than dump bytes.
+            try:
+                text = raw.decode("utf-8")
+            except Exception:
+                return (f"[the attached file '{name}' is a "
+                        f"{ext or 'binary'} type I can't read as text]")
+    except Exception as e:
+        return f"[could not read the attached file '{name}': {e}]"
+    text = (text or "").strip()
+    if len(text) > _FILE_TEXT_LIMIT:
+        text = text[:_FILE_TEXT_LIMIT] + "\n\n[... file truncated for length ...]"
+    return text or f"[the attached file '{name}' had no readable text]"
 
 # Bold **..**, code `..`, italic *..*, and italic _.._ . The underscore form requires word
 # boundaries and no underscores inside, so runs of underscores (signature lines, fill-in
@@ -979,12 +1066,19 @@ def _premium_content(text, attachments):
         b64 = a.get("data") or ""
         if not b64:
             continue
+        name = a.get("name", "file")
         data_url = f"data:{mime};base64,{b64}"
         if a.get("kind") == "image" or mime.startswith("image/"):
             parts.append({"type": "image_url", "image_url": {"url": data_url}})
-        else:
+        elif _file_ext(name) == "pdf":
+            # Cloud models read PDFs natively (layout, figures); hand it over as a file.
             parts.append({"type": "file",
-                          "file": {"filename": a.get("name", "file"), "file_data": data_url}})
+                          "file": {"filename": name, "file_data": data_url}})
+        else:
+            # Office/text formats OpenRouter won't parse: extract the text here instead.
+            ftext = extract_file_text(name, b64)
+            parts.append({"type": "text",
+                          "text": f"[Attached file: {name}]\n{ftext}"})
     if not parts:
         parts.append({"type": "text", "text": text or ""})
     return parts
@@ -2508,11 +2602,22 @@ class Handler(BaseHTTPRequestHandler):
         num_ctx = body.get("num_ctx") or 8192
         image = body.get("image")                      # base64 (downscaled) or None
         vision_model = (body.get("vision_model") or "").strip()
+        file_att = body.get("file") or None            # {"name","mime","data"(base64)} or None
         if not model:
             raise ApiError(400, "model required")
 
         # These can raise 404/400 before we commit to a streaming response.
         c = load_conv(cid)
+
+        # If a document is attached, pull its text out now (on the PC, where the libraries
+        # live), so the model can read it. A failed read becomes a short note, not a crash.
+        file_name = ""
+        file_text = ""
+        if file_att and file_att.get("data"):
+            file_name = (file_att.get("name") or "file").strip()
+            file_text = extract_file_text(file_name, file_att["data"])
+            if not content:
+                content = f"Please read the attached file ({file_name})."
 
         # If a photo is attached, read it with the vision model first, so a failure
         # comes back as a clean error instead of a half-streamed reply.
@@ -2535,6 +2640,9 @@ class Handler(BaseHTTPRequestHandler):
                 um["image"] = image
             if vision_note:
                 um["vision_note"] = vision_note
+            if file_text:
+                um["file_text"] = file_text
+                um["file_name"] = file_name
             c["messages"].append(um)
             if c.get("title") in (None, "", "New conversation"):
                 first = content.splitlines()[0] if content else "New conversation"
@@ -2546,6 +2654,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 conv_files_add("conv", cid, f"image-{int(time.time())}.jpg",
                                "image/jpeg", "image", image)
+            except Exception:
+                pass
+
+        # Keep the uploaded document too, under its own name.
+        if file_att and file_att.get("data"):
+            try:
+                conv_files_add("conv", cid, file_name or f"file-{int(time.time())}",
+                               (file_att.get("mime") or "application/octet-stream"),
+                               "file", file_att["data"])
             except Exception:
                 pass
 
@@ -2572,6 +2689,10 @@ class Handler(BaseHTTPRequestHandler):
                 txt = ("[An image was attached. A vision model read it as:]\n"
                        + m["vision_note"] + "\n\n[The user's message about the image:]\n"
                        + m["text"])
+            if m.get("file_text"):
+                txt = ("[The user attached a file named " + m.get("file_name", "file")
+                       + ". Its contents:]\n" + m["file_text"]
+                       + "\n\n[The user's message about the file:]\n" + m["text"])
             oll_msgs.append({"role": m["role"], "content": txt})
 
         # From here on we stream; do not raise past this point.
