@@ -771,6 +771,7 @@ private fun ConvChat(
             Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
                 FilledIconButton(
                     onClick = {
+                        vm.beginExternalPick()
                         photoPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
@@ -783,7 +784,7 @@ private fun ConvChat(
                 }
                 Spacer(Modifier.width(6.dp))
                 FilledIconButton(
-                    onClick = { filePicker.launch("*/*") },
+                    onClick = { vm.beginExternalPick(); filePicker.launch("*/*") },
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = W.SurfaceHi, contentColor = W.Amber
                     ),

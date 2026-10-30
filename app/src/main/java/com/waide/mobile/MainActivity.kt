@@ -124,9 +124,10 @@ private fun Shell(
             if (event == Lifecycle.Event.ON_RESUME) {
                 storageOk = hasAllFiles()
                 vm.refreshModels()
+                cvm.onResumed()
             }
             if (event == Lifecycle.Event.ON_STOP) {
-                cvm.lock()
+                cvm.lockOnBackground()
             }
         }
         owner.lifecycle.addObserver(obs)

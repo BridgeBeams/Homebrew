@@ -118,6 +118,20 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         _agentState.value = AgentState()
     }
 
+    // Attaching a photo or file opens the system picker, which backgrounds the app and
+    // fires ON_STOP. Without this guard that ON_STOP would re-lock the tab and wipe the
+    // open chat and the pending attachment. We skip exactly one background-lock when we
+    // launched the picker ourselves; the flag is cleared again as soon as we resume.
+    @Volatile private var pickingExternal = false
+    fun beginExternalPick() { pickingExternal = true }
+    fun onResumed() { pickingExternal = false }
+
+    /** Called when the app goes to the background. Re-locks unless we just opened a picker. */
+    fun lockOnBackground() {
+        if (pickingExternal) { pickingExternal = false; return }
+        lock()
+    }
+
     fun unlock(pin: String) {
         if (_state.value.authBusy) return
         val b = base()
