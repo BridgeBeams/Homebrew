@@ -76,6 +76,12 @@ MASTER_RESET_PIN = "313131"
 EMBED_MODEL = os.environ.get("WAIDE_EMBED_MODEL", "nomic-embed-text")
 RETRIEVE_K = 8            # how many conversation chunks to feed an agent per question
 
+# Anti-repetition sampling for local (Ollama) chats. The default repeat window is only 64
+# tokens, so once a long reply runs past that the model can loop a whole paragraph with no
+# penalty. A wider window plus a modest penalty stops the page-after-page repetition on long,
+# descriptive answers without flattening normal prose.
+OLLAMA_ANTI_REPEAT = {"repeat_penalty": 1.2, "repeat_last_n": 2048, "frequency_penalty": 0.5}
+
 # ---- conversation compaction (keep long chats fast by summarizing old turns) ----
 # Budgets are rough token estimates (~4 chars per token). When the history sent to a
 # model would exceed the budget, the oldest turns are folded into a running summary and
@@ -2595,7 +2601,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             ollama_chat_stream({"model": model, "messages": oll_msgs, "stream": True,
-                                "options": {"num_ctx": num_ctx}}, on_piece, on_image)
+                                "options": {"num_ctx": num_ctx, **OLLAMA_ANTI_REPEAT}},
+                               on_piece, on_image)
         except Exception as e:
             try:
                 write_chunk(f"\n[error: {e}]")
@@ -2611,7 +2618,7 @@ class Handler(BaseHTTPRequestHandler):
                 with _store_lock:
                     c2 = load_conv(cid)
                     am = {"id": uuid.uuid4().hex, "role": "assistant",
-                          "text": acc["t"], "ts": time.time()}
+                          "text": acc["t"], "model": model, "ts": time.time()}
                     if gen_images:
                         am["image"] = gen_images[0]   # shown in the bubble
                     c2["messages"].append(am)
@@ -2696,7 +2703,8 @@ class Handler(BaseHTTPRequestHandler):
                 acc["t"] += p
                 write_chunk(p)
             ollama_chat_stream({"model": model, "messages": oll_msgs, "stream": True,
-                                "options": {"num_ctx": num_ctx}}, on_piece)
+                                "options": {"num_ctx": num_ctx, **OLLAMA_ANTI_REPEAT}},
+                               on_piece)
         except Exception as e:
             try:
                 write_chunk(f"\n[error: {e}]")
