@@ -316,7 +316,13 @@ object ServerClient {
             .put("model", model)
             .put("messages", msgArr)
             .put("stream", true)
-            .put("options", JSONObject().put("num_ctx", numCtx))
+            // Anti-repetition: the default repeat window is only 64 tokens, so long replies
+            // loop whole paragraphs. A wider window plus a modest penalty stops that.
+            .put("options", JSONObject()
+                .put("num_ctx", numCtx)
+                .put("repeat_penalty", 1.2)
+                .put("repeat_last_n", 2048)
+                .put("frequency_penalty", 0.5))
             .toString()
 
         val conn = (URL("$b/api/chat").openConnection() as HttpURLConnection).apply {
