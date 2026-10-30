@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -642,6 +643,11 @@ private fun ConvChat(
         ActivityResultContracts.PickVisualMedia()
     ) { uri -> if (uri != null) onImagePicked(uri) }
 
+    // Any document: PDF, TXT, Excel, Word, CSV, etc. The PC server extracts its text.
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> if (uri != null) vm.attachFile(uri) }
+
     val itemCount = state.messages.size + if (streamingText != null) 1 else 0
     LaunchedEffect(itemCount, streamingText?.length) {
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
@@ -746,6 +752,22 @@ private fun ConvChat(
                     TextButton(onClick = onClearImage) { Text("Remove", color = W.Danger) }
                 }
             }
+
+            // pending document chip (a file chosen but not yet sent)
+            if (state.pendingFileB64 != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = null, tint = W.Amber,
+                        modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(state.pendingFileName.ifBlank { "File attached" }, color = W.Text,
+                        style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.clearFile() }) { Text("Remove", color = W.Danger) }
+                }
+            }
             Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
                 FilledIconButton(
                     onClick = {
@@ -758,6 +780,16 @@ private fun ConvChat(
                     modifier = Modifier.size(52.dp)
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = "Attach image")
+                }
+                Spacer(Modifier.width(6.dp))
+                FilledIconButton(
+                    onClick = { filePicker.launch("*/*") },
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = W.SurfaceHi, contentColor = W.Amber
+                    ),
+                    modifier = Modifier.size(52.dp)
+                ) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = "Attach file")
                 }
                 Spacer(Modifier.width(8.dp))
                 OutlinedTextField(
@@ -775,7 +807,7 @@ private fun ConvChat(
                 Spacer(Modifier.width(8.dp))
                 FilledIconButton(
                     onClick = { if (state.busy) onStop() else { val t = draft; draft = ""; onSend(t) } },
-                    enabled = state.busy || draft.isNotBlank() || state.pendingImageB64 != null,
+                    enabled = state.busy || draft.isNotBlank() || state.pendingImageB64 != null || state.pendingFileB64 != null,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = W.Amber, contentColor = Color(0xFF1A1204),
                         disabledContainerColor = W.SurfaceHi
@@ -960,6 +992,16 @@ private fun ConvBubble(m: ConvMsg, onImageTap: (String) -> Unit = {},
         }
         if (m.hasVision) {
             Text("image read", color = W.Muted, style = MaterialTheme.typography.labelSmall)
+            Spacer(Modifier.height(4.dp))
+        }
+        if (m.fileName.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.AttachFile, contentDescription = null, tint = W.Muted,
+                    modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(m.fileName, color = W.Muted, style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Spacer(Modifier.height(4.dp))
         }
         if (m.text.isNotBlank()) {
