@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -52,6 +53,10 @@ data class ConvState(
     // image / vision (the image reader is chosen in Settings, shared with the Server tab)
     val pendingImageB64: String? = null,
     val visionModel: String = "",
+    // document attachment (PDF, TXT, Excel, Word, ... read on the PC server)
+    val pendingFileB64: String? = null,
+    val pendingFileName: String = "",
+    val pendingFileMime: String = "",
     // conversation files folder
     val files: List<ConvFile> = emptyList(),
     val filesOpen: Boolean = false,
@@ -564,9 +569,12 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         val id = _state.value.openId ?: return
         val model = _state.value.selectedModel
         val img = _state.value.pendingImageB64
+        val fileB64 = _state.value.pendingFileB64
+        val fileName = _state.value.pendingFileName
+        val fileMime = _state.value.pendingFileMime
         val prompt = text.trim()
         if (_state.value.busy) return
-        if (prompt.isEmpty() && img == null) return
+        if (prompt.isEmpty() && img == null && fileB64 == null) return
         if (model.isBlank()) { _state.value = _state.value.copy(error = "Pick a model first.") ; return }
         if (img != null && _state.value.visionModel.isBlank()) {
             _state.value = _state.value.copy(
@@ -575,15 +583,21 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
         }
         val vision = _state.value.visionModel
         val b = base()
+        val localText = prompt.ifBlank {
+            if (img != null) "What's in this image?" else "Please read the attached file ($fileName)."
+        }
         val localUser = ConvMsg("local-${System.currentTimeMillis()}", "user",
-            prompt.ifBlank { "What's in this image?" }, imageB64 = img, hasVision = img != null)
+            localText, imageB64 = img, hasVision = img != null,
+            fileName = if (fileB64 != null) fileName else "")
         _state.value = _state.value.copy(messages = _state.value.messages + localUser,
-            pendingImageB64 = null, streaming = "", busy = true, error = null)
+            pendingImageB64 = null, pendingFileB64 = null, pendingFileName = "", pendingFileMime = "",
+            streaming = "", busy = true, error = null)
         GenerationService.begin(getApplication())
         genJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 var acc = ""
-                ConversationsClient.chatStream(b, token, id, model, prompt, 8192, img, vision) { piece ->
+                ConversationsClient.chatStream(b, token, id, model, prompt, 8192, img, vision,
+                    fileName.ifBlank { null }, fileMime.ifBlank { null }, fileB64) { piece ->
                     acc += piece
                     _state.value = _state.value.copy(streaming = acc)
                 }
@@ -613,6 +627,44 @@ class ConversationsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearImage() { _state.value = _state.value.copy(pendingImageB64 = null) }
+
+    /** Attach a document (PDF, TXT, Excel, Word, CSV, ...). The PC server reads its text. */
+    fun attachFile(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = runCatching { readFileAttach(uri) }.getOrNull()
+            withContext(Dispatchers.Main) {
+                _state.value = if (res == null)
+                    _state.value.copy(error = "Couldn't read that file (too big, max ~20MB?).")
+                else _state.value.copy(
+                    pendingFileB64 = res.third, pendingFileName = res.first,
+                    pendingFileMime = res.second, error = null)
+            }
+        }
+    }
+
+    fun clearFile() {
+        _state.value = _state.value.copy(
+            pendingFileB64 = null, pendingFileName = "", pendingFileMime = "")
+    }
+
+    /** Returns Triple(name, mime, base64). Throws on failure or oversize. */
+    private fun readFileAttach(uri: Uri): Triple<String, String, String> {
+        val cr = getApplication<Application>().contentResolver
+        val mime = cr.getType(uri) ?: "application/octet-stream"
+        var name = "file"
+        runCatching {
+            cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cur ->
+                if (cur.moveToFirst()) {
+                    val idx = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) name = cur.getString(idx) ?: "file"
+                }
+            }
+        }
+        val bytes = cr.openInputStream(uri).use { it?.readBytes() }
+            ?: throw IllegalStateException("read failed")
+        if (bytes.size > 20_000_000) throw IllegalStateException("too big")
+        return Triple(name, mime, Base64.encodeToString(bytes, Base64.NO_WRAP))
+    }
 
     private fun uriToBase64(uri: Uri): String {
         val ctx = getApplication<Application>()

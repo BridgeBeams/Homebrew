@@ -24,7 +24,8 @@ data class ConvMsg(
     val text: String,
     val imageB64: String? = null,   // thumbnail of an attached photo, if any
     val hasVision: Boolean = false, // this turn had an image the vision model read
-    val model: String = ""          // the model that produced this assistant turn (for export labels)
+    val model: String = "",         // the model that produced this assistant turn (for export labels)
+    val fileName: String = ""       // name of a document attached to this turn, if any
 )
 data class LoginInfo(
     val token: String,
@@ -262,7 +263,8 @@ object ConversationsClient {
                 val img = m.optString("image")
                 val vn = m.optString("vision_note")
                 msgs.add(ConvMsg(m.optString("id"), m.optString("role"), m.optString("text"),
-                    if (img.isBlank()) null else img, vn.isNotBlank(), m.optString("model")))
+                    if (img.isBlank()) null else img, vn.isNotBlank(), m.optString("model"),
+                    m.optString("file_name")))
             }
         }
         return ConvDetail(o.optString("title", "Untitled"), msgs,
@@ -331,6 +333,7 @@ object ConversationsClient {
         base: String, token: String, id: String,
         model: String, content: String, numCtx: Int,
         imageB64: String?, visionModel: String?,
+        fileName: String? = null, fileMime: String? = null, fileData: String? = null,
         onToken: (String) -> Unit
     ): String {
         val c = open("$base/conversations/$id/chat", "POST", token)
@@ -340,6 +343,10 @@ object ConversationsClient {
         val body = JSONObject().put("model", model).put("content", content).put("num_ctx", numCtx)
         if (imageB64 != null) body.put("image", imageB64)
         if (!visionModel.isNullOrBlank()) body.put("vision_model", visionModel)
+        if (!fileData.isNullOrBlank()) body.put("file", JSONObject()
+            .put("name", fileName ?: "file")
+            .put("mime", fileMime ?: "application/octet-stream")
+            .put("data", fileData))
         OutputStreamWriter(c.outputStream, Charsets.UTF_8).use { it.write(body.toString()) }
         if (c.responseCode != 200) fail(c)
         val sb = StringBuilder()
