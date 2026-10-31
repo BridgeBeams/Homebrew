@@ -36,6 +36,44 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# ---------------------------------------------------------------- dependency bootstrap
+# A fresh PC only needs Python + this one file. On startup the server installs the handful
+# of libraries it uses (reading PDFs / Word / Excel / PowerPoint / EPUB and generating
+# PDFs); anything already present is skipped, so this is safe to run every time. To turn
+# it off (e.g. an offline machine), set the WAIDE_NO_AUTODEPS environment variable to 1;
+# the server still runs, and any feature whose library is missing simply stays off.
+#   import name -> pip package name
+_WAIDE_DEPS = {
+    "pypdf": "pypdf",            # read PDF files
+    "docx": "python-docx",       # read and write Word (.docx)
+    "openpyxl": "openpyxl",      # read and write Excel (.xlsx)
+    "pptx": "python-pptx",       # read PowerPoint (.pptx)
+    "reportlab": "reportlab",    # generate nicely formatted PDFs
+    "ebooklib": "ebooklib",      # read EPUB e-books
+}
+
+def _ensure_deps():
+    if os.environ.get("WAIDE_NO_AUTODEPS", "").strip().lower() in ("1", "true", "yes", "on"):
+        return
+    import importlib.util
+    import subprocess
+    missing = [pkg for mod, pkg in _WAIDE_DEPS.items()
+               if importlib.util.find_spec(mod) is None]
+    if not missing:
+        return
+    print(f"wAide: installing missing libraries: {', '.join(missing)}")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install",
+                               "--disable-pip-version-check", *missing])
+        importlib.invalidate_caches()   # so the imports below see the new packages
+        print("wAide: libraries installed.")
+    except Exception as e:
+        print(f"wAide: could not auto-install ({e}).")
+        print(f"wAide: the server will still run; features needing those libraries stay")
+        print(f"wAide: off until you run:  pip install {' '.join(missing)}")
+
+_ensure_deps()
+
 # ---------------------------------------------------------------- config / paths
 DATA_DIR = Path(os.environ.get("WAIDE_DATA", Path.home() / ".waide"))
 CONV_DIR = DATA_DIR / "conversations"
